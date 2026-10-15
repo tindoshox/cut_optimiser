@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:csv/csv.dart';
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -63,7 +64,12 @@ class Part {
       this.b = 0,
       this.quantity = 1,
       this.rotate = true,
-      this.stockId = ''});
+      this.stockId = '',
+      String? id,
+      this.pieceIndex})
+      : id = id ?? DateTime.now().microsecondsSinceEpoch.toString();
+  final String id;
+  final int? pieceIndex;
   String name;
   double a;
   double b;
@@ -71,10 +77,16 @@ class Part {
   bool rotate;
   String stockId;
   Map<String, dynamic> toJson() => {
-        'name': name, 'a': a, 'b': b, 'quantity': quantity,
-        'rotate': rotate, 'stockId': stockId
+        'id': id,
+        'name': name,
+        'a': a,
+        'b': b,
+        'quantity': quantity,
+        'rotate': rotate,
+        'stockId': stockId
       };
   factory Part.fromJson(Map<String, dynamic> j) => Part(
+      id: j['id']?.toString(),
       name: j['name'] ?? 'Part',
       a: (j['a'] as num).toDouble(),
       b: (j['b'] as num? ?? 0).toDouble(),
@@ -92,7 +104,8 @@ class StockConfig {
       this.quantity = 0,
       this.price = 0,
       this.kerf = 3,
-      this.trim = 0}) : id = id ?? DateTime.now().microsecondsSinceEpoch.toString();
+      this.trim = 0})
+      : id = id ?? DateTime.now().microsecondsSinceEpoch.toString();
   final String id;
   String name;
   double width;
@@ -102,8 +115,14 @@ class StockConfig {
   double kerf;
   double trim;
   Map<String, dynamic> toJson() => {
-        'id': id, 'name': name, 'width': width, 'height': height,
-        'quantity': quantity, 'price': price, 'kerf': kerf, 'trim': trim
+        'id': id,
+        'name': name,
+        'width': width,
+        'height': height,
+        'quantity': quantity,
+        'price': price,
+        'kerf': kerf,
+        'trim': trim
       };
   factory StockConfig.fromJson(Map<String, dynamic> j) => StockConfig(
       id: j['id']?.toString(),
@@ -128,19 +147,31 @@ class Project {
     List<Part>? parts,
     StockConfig? stock,
     List<StockConfig>? stocks,
+    Set<String>? cutPieces,
     this.updated = '',
   })  : parts = parts ?? [],
         stocks = stocks ?? [stock ?? StockConfig()],
+        cutPieces = cutPieces ?? <String>{},
         id = DateTime.now().microsecondsSinceEpoch.toString() {
     _assignDefaultStock();
   }
 
   Project._({
-    required this.id, required this.name, required this.mode,
-    required this.material, required this.variant, required this.unit,
-    required this.kerf, required this.trim, required this.parts,
-    required this.stocks, required this.updated,
-  }) { _assignDefaultStock(); }
+    required this.id,
+    required this.name,
+    required this.mode,
+    required this.material,
+    required this.variant,
+    required this.unit,
+    required this.kerf,
+    required this.trim,
+    required this.parts,
+    required this.stocks,
+    required this.cutPieces,
+    required this.updated,
+  }) {
+    _assignDefaultStock();
+  }
 
   final String id;
   String name;
@@ -152,12 +183,17 @@ class Project {
   double trim;
   List<Part> parts;
   List<StockConfig> stocks;
+  Set<String> cutPieces;
   String updated;
 
   // Backwards-compatible convenience accessor for legacy UI and saved projects.
   StockConfig get stock => stocks.first;
   set stock(StockConfig value) {
-    if (stocks.isEmpty) { stocks = [value]; } else { stocks[0] = value; }
+    if (stocks.isEmpty) {
+      stocks = [value];
+    } else {
+      stocks[0] = value;
+    }
     _assignDefaultStock();
   }
 
@@ -171,13 +207,14 @@ class Project {
   }
 
   Map<String, dynamic> toJson() => {
-    'id': id, 'name': name, 'mode': mode.name, 'material': material,
-    'variant': variant, 'unit': unit, 'kerf': kerf, 'trim': trim,
-    'parts': parts.map((p) => p.toJson()).toList(),
-    'stocks': stocks.map((s) => s.toJson()).toList(),
-    // Keep legacy key for compatibility with older app builds.
-    'stock': stock.toJson(), 'updated': updated,
-  };
+        'id': id, 'name': name, 'mode': mode.name, 'material': material,
+        'variant': variant, 'unit': unit, 'kerf': kerf, 'trim': trim,
+        'parts': parts.map((p) => p.toJson()).toList(),
+        'stocks': stocks.map((s) => s.toJson()).toList(),
+        'cutPieces': cutPieces.toList(),
+        // Keep legacy key for compatibility with older app builds.
+        'stock': stock.toJson(), 'updated': updated,
+      };
 
   factory Project.fromJson(Map<String, dynamic> j) {
     final stockList = (j['stocks'] as List?)
@@ -186,13 +223,15 @@ class Project {
     final legacyStock = StockConfig.fromJson(
         Map<String, dynamic>.from(j['stock'] ?? {'width': 6000}));
     final stocks = (stockList == null || stockList.isEmpty)
-        ? <StockConfig>[legacyStock] : stockList;
+        ? <StockConfig>[legacyStock]
+        : stockList;
     if (stockList == null || stockList.isEmpty) {
       legacyStock.kerf = (j['kerf'] as num? ?? 3).toDouble();
       legacyStock.trim = (j['trim'] as num? ?? 0).toDouble();
     }
     final parts = ((j['parts'] as List?) ?? [])
-        .map((e) => Part.fromJson(Map<String, dynamic>.from(e))).toList();
+        .map((e) => Part.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
     for (final part in parts) {
       if (part.stockId.isEmpty || !stocks.any((s) => s.id == part.stockId)) {
         part.stockId = stocks.first.id;
@@ -201,40 +240,109 @@ class Project {
     return Project._(
       id: j['id'] ?? DateTime.now().microsecondsSinceEpoch.toString(),
       name: j['name'] ?? 'Untitled',
-      mode: CutMode.values.firstWhere((m) => m.name == j['mode'], orElse: () => CutMode.linear),
-      material: j['material'] ?? 'Mild steel', variant: j['variant'] ?? '',
-      unit: j['unit'] ?? 'mm', kerf: (j['kerf'] as num? ?? 3).toDouble(),
-      trim: (j['trim'] as num? ?? 0).toDouble(), parts: parts,
-      stocks: stocks, updated: j['updated'] ?? '',
+      mode: CutMode.values
+          .firstWhere((m) => m.name == j['mode'], orElse: () => CutMode.linear),
+      material: j['material'] ?? 'Mild steel',
+      variant: j['variant'] ?? '',
+      unit: j['unit'] ?? 'mm',
+      kerf: (j['kerf'] as num? ?? 3).toDouble(),
+      trim: (j['trim'] as num? ?? 0).toDouble(),
+      parts: parts,
+      stocks: stocks,
+      cutPieces:
+          ((j['cutPieces'] as List?) ?? []).map((e) => e.toString()).toSet(),
+      updated: j['updated'] ?? '',
     );
   }
   int get totalPieces => parts.fold(0, (sum, p) => sum + p.quantity);
 }
 
 class LinearStick {
-  LinearStick(this.index, this.cuts, this.used, this.stockLength, {this.stockName = 'Stock'});
+  LinearStick(this.index, this.cuts, this.used, this.stockLength,
+      {this.stockName = 'Stock'});
   String stockName;
   int index;
   List<PlacedPart> cuts;
   double used;
   double stockLength;
+
+  double offcutLength(double trim) =>
+      math.max(0, stockLength - 2 * trim - used);
+}
+
+List<List<LinearStick>> groupLinearDiagrams(
+    List<LinearStick> diagrams, double Function(LinearStick) trimFor) {
+  final groups = <String, List<LinearStick>>{};
+  for (final diagram in diagrams) {
+    final key = jsonEncode([
+      diagram.stockName,
+      diagram.stockLength,
+      trimFor(diagram),
+      for (final part in diagram.cuts)
+        [
+          part.name,
+          part.x,
+          part.w,
+          part.isCut,
+        ],
+    ]);
+    groups.putIfAbsent(key, () => []).add(diagram);
+  }
+  return groups.values.toList();
 }
 
 class PlacedPart {
-  PlacedPart(this.name, this.x, this.y, this.w, this.h, {this.rotated = false});
+  PlacedPart(this.name, this.x, this.y, this.w, this.h,
+      {this.rotated = false,
+      this.partId = '',
+      this.pieceIndex = 0,
+      this.isCut = false});
   final String name;
   final double x, y, w, h;
   final bool rotated;
+  final String partId;
+  final int pieceIndex;
+  final bool isCut;
+  String get cutKey => '$partId:$pieceIndex';
 }
 
 class SheetLayout {
   SheetLayout(
-      this.index, this.placements, this.stockW, this.stockH, this.usedArea, {this.stockName = 'Stock'});
+      this.index, this.placements, this.stockW, this.stockH, this.usedArea,
+      {this.stockName = 'Stock'});
   final String stockName;
   final int index;
   final List<PlacedPart> placements;
   final double stockW, stockH;
   double usedArea;
+
+  double unusedArea(double trim) =>
+      math.max(0, (stockW - 2 * trim) * (stockH - 2 * trim) - usedArea);
+}
+
+List<List<SheetLayout>> groupSheetDiagrams(
+    List<SheetLayout> diagrams, double Function(SheetLayout) trimFor) {
+  final groups = <String, List<SheetLayout>>{};
+  for (final diagram in diagrams) {
+    final key = jsonEncode([
+      diagram.stockName,
+      diagram.stockW,
+      diagram.stockH,
+      trimFor(diagram),
+      for (final part in diagram.placements)
+        [
+          part.name,
+          part.x,
+          part.y,
+          part.w,
+          part.h,
+          part.rotated,
+          part.isCut,
+        ],
+    ]);
+    groups.putIfAbsent(key, () => []).add(diagram);
+  }
+  return groups.values.toList();
 }
 
 class SolveResult {
@@ -263,11 +371,20 @@ class CuttingEngine {
     var demand = 0.0;
     var stockArea = 0.0;
     for (final stock in p.stocks) {
-      final assigned = p.parts.where((part) => part.stockId == stock.id).toList();
+      final assigned =
+          p.parts.where((part) => part.stockId == stock.id).toList();
       if (assigned.isEmpty) continue;
-      final sub = Project(name: p.name, mode: p.mode, material: p.material,
-        variant: p.variant, unit: p.unit, kerf: stock.kerf, trim: stock.trim,
-        parts: assigned, stock: stock);
+      final sub = Project(
+          name: p.name,
+          mode: p.mode,
+          material: p.material,
+          variant: p.variant,
+          unit: p.unit,
+          kerf: stock.kerf,
+          trim: stock.trim,
+          parts: assigned,
+          stock: stock,
+          cutPieces: p.cutPieces);
       final result = p.mode == CutMode.linear ? _linear(sub) : _sheets(sub);
       demand += result.demandArea;
       stockArea += result.totalStockArea;
@@ -284,55 +401,57 @@ class CuttingEngine {
           final layout = result.sheets[i];
           // Give sheets a project-wide index while retaining their stock format.
           final combined = SheetLayout(allSheets.length + 1, layout.placements,
-              layout.stockW, layout.stockH, layout.usedArea, stockName: stock.name);
+              layout.stockW, layout.stockH, layout.usedArea,
+              stockName: stock.name);
           allSheets.add(combined);
         }
       }
     }
-    return SolveResult(mode: p.mode, linear: allLinear, sheets: allSheets,
-      demandArea: demand, totalStockArea: stockArea, notes: notes);
+    return SolveResult(
+        mode: p.mode,
+        linear: allLinear,
+        sheets: allSheets,
+        demandArea: demand,
+        totalStockArea: stockArea,
+        notes: notes);
   }
 
   static SolveResult _linear(Project p) {
     final items = <Part>[];
     for (final part in p.parts) {
       for (var i = 0; i < part.quantity; i++) {
-        items.add(Part(name: part.name, a: part.a));
+        items.add(Part(id: part.id, pieceIndex: i, name: part.name, a: part.a));
       }
     }
-    items.sort((a, b) => b.a.compareTo(a.a));
     final usable = p.stock.width - p.trim * 2;
-    final sticks = <LinearStick>[];
-    for (final item in items) {
-      if (item.a <= 0 || item.a > usable) continue;
-      LinearStick? best;
-      var bestRemaining = double.infinity;
-      for (final stick in sticks) {
-        final nextUsed =
-            stick.used + item.a + (stick.cuts.isEmpty ? 0 : p.kerf);
-        final rem = usable - nextUsed;
-        if (rem >= -0.000001 && rem < bestRemaining) {
-          best = stick;
-          bestRemaining = rem;
-        }
-      }
-      if (best == null) {
-        best = LinearStick(sticks.length + 1, [], 0, p.stock.width);
-        sticks.add(best);
-      }
-      final x = p.trim + best.used + (best.cuts.isEmpty ? 0 : p.kerf);
-      best.cuts.add(PlacedPart(item.name, x, 0, item.a, 1));
-      best.used += item.a + (best.cuts.length == 1 ? 0 : p.kerf);
-    }
+    final orders = <List<Part>>[
+      [...items]..sort((a, b) => b.a.compareTo(a.a)),
+      [...items]..sort((a, b) => a.a.compareTo(b.a)),
+      [...items],
+    ];
+    final candidates = <List<LinearStick>>[
+      for (final order in orders) ...[
+        _packLinear(order, p, usable, bestFit: true),
+        _packLinear(order, p, usable, bestFit: false),
+      ],
+    ];
+    candidates.sort((a, b) {
+      final count = a.length.compareTo(b.length);
+      if (count != 0) return count;
+      return _linearOffcutScore(a, usable)
+          .compareTo(_linearOffcutScore(b, usable));
+    });
+    final sticks = candidates.first;
     final totalDemand = items.fold<double>(0, (s, i) => s + i.a);
     final totalStock = sticks.length * usable;
     final notes = <String>[
-      'Heuristic: best-fit decreasing; not a proof of global optimality.'
+      'Heuristic: best-fit/first-fit across descending, ascending and entered demand orders; not a proof of global optimality.'
     ];
-    final oversized = p.parts.where((part) => part.a > usable).toList();
+    final oversized =
+        p.parts.where((part) => part.a > usable || part.a <= 0).toList();
     if (oversized.isNotEmpty) {
       notes.add(
-          'Infeasible parts skipped (longer than usable stock): ${oversized.map((e) => e.name).join(', ')}.');
+          'Invalid or infeasible parts skipped (non-positive or longer than usable stock): ${oversized.map((e) => e.name).join(', ')}.');
     }
     if (p.stock.quantity > 0 && sticks.length > p.stock.quantity) {
       notes.add(
@@ -347,56 +466,86 @@ class CuttingEngine {
         notes: notes);
   }
 
+  static List<LinearStick> _packLinear(
+      List<Part> order, Project p, double usable,
+      {required bool bestFit}) {
+    final sticks = <LinearStick>[];
+    for (final item in order) {
+      if (item.a <= 0 || item.a > usable) continue;
+      LinearStick? selected;
+      var bestRemaining = double.infinity;
+      for (final stick in sticks) {
+        final nextUsed =
+            stick.used + item.a + (stick.cuts.isEmpty ? 0 : p.kerf);
+        final remaining = usable - nextUsed;
+        if (remaining < -0.000001) continue;
+        if (selected == null || (bestFit && remaining < bestRemaining)) {
+          selected = stick;
+          bestRemaining = remaining;
+          if (!bestFit) break;
+        }
+      }
+      selected ??= LinearStick(sticks.length + 1, [], 0, p.stock.width);
+      if (!sticks.contains(selected)) sticks.add(selected);
+      final x = p.trim + selected.used + (selected.cuts.isEmpty ? 0 : p.kerf);
+      selected.cuts.add(PlacedPart(item.name, x, 0, item.a, 1,
+          partId: item.id,
+          pieceIndex: item.pieceIndex!,
+          isCut: p.cutPieces.contains('${item.id}:${item.pieceIndex}')));
+      selected.used += item.a + (selected.cuts.length == 1 ? 0 : p.kerf);
+    }
+    return sticks;
+  }
+
+  static double _linearOffcutScore(List<LinearStick> sticks, double usable) =>
+      sticks.fold<double>(
+          0,
+          (score, stick) =>
+              score + math.pow(math.max(0, usable - stick.used), 2).toDouble());
+
   static SolveResult _sheets(Project p) {
     final parts = <Part>[];
     for (final part in p.parts) {
       for (var i = 0; i < part.quantity; i++) {
-        parts.add(
-            Part(name: part.name, a: part.a, b: part.b, rotate: part.rotate));
+        parts.add(Part(
+            id: part.id,
+            pieceIndex: i,
+            name: part.name,
+            a: part.a,
+            b: part.b,
+            rotate: part.rotate));
       }
     }
-    parts.sort((a, b) => (b.a * b.b).compareTo(a.a * a.b));
     final usableW = p.stock.width - 2 * p.trim;
     final usableH = p.stock.height - 2 * p.trim;
-    final sheets = <SheetLayout>[];
-    for (final part in parts) {
-      if (part.a <= 0 || part.b <= 0 || usableW <= 0 || usableH <= 0) continue;
-      var placed = false;
-      for (final sheet in sheets) {
-        final spot =
-            _findSpot(sheet.placements, part, usableW, usableH, p.kerf);
-        if (spot != null) {
-          sheet.placements.add(PlacedPart(
-              part.name, spot.x, spot.y, spot.w, spot.h,
-              rotated: spot.rotated));
-          sheet.usedArea += part.a * part.b;
-          placed = true;
-          break;
-        }
-      }
-      if (!placed) {
-        final sheet = SheetLayout(
-            sheets.length + 1, [], p.stock.width, p.stock.height, 0);
-        final spot =
-            _findSpot(sheet.placements, part, usableW, usableH, p.kerf);
-        if (spot != null) {
-          sheet.placements.add(PlacedPart(
-              part.name, spot.x, spot.y, spot.w, spot.h,
-              rotated: spot.rotated));
-          sheet.usedArea += part.a * part.b;
-          sheets.add(sheet);
-        }
-      }
-    }
+    final orders = <List<Part>>[
+      [...parts]..sort((a, b) => (b.a * b.b).compareTo(a.a * a.b)),
+      [...parts]
+        ..sort((a, b) => math.max(b.a, b.b).compareTo(math.max(a.a, a.b))),
+      [...parts]..sort((a, b) => b.a.compareTo(a.a)),
+      [...parts]..sort((a, b) => b.b.compareTo(a.b)),
+      [...parts]..sort((a, b) => (b.a + b.b).compareTo(a.a + a.b)),
+    ];
+    final candidates = orders
+        .map((order) => _packSheets(order, p, usableW, usableH))
+        .toList()
+      ..sort((a, b) {
+        final count = a.length.compareTo(b.length);
+        if (count != 0) return count;
+        return _sheetCompactnessScore(a).compareTo(_sheetCompactnessScore(b));
+      });
+    final sheets = candidates.first;
     final demandArea = parts.fold<double>(0, (s, p) => s + p.a * p.b);
     final totalArea = sheets.length * usableW * usableH;
     final notes = <String>[
-      'Heuristic: area-sorted bottom-left placement; not a proof of global optimality.',
+      'Heuristic: best layout from area, longest-side, width, height and perimeter orderings; not a proof of global optimality.',
       'Layouts show geometric nesting only. Guillotine cut sequence and machine-specific constraints are not implemented.'
     ];
     final invalid = parts
-        .where((part) => !(part.a <= usableW && part.b <= usableH ||
-            (part.rotate && part.b <= usableW && part.a <= usableH)))
+        .where((part) => !(part.a > 0 &&
+            part.b > 0 &&
+            (part.a <= usableW && part.b <= usableH ||
+                (part.rotate && part.b <= usableW && part.a <= usableH))))
         .toList();
     if (invalid.isNotEmpty) {
       notes.add(
@@ -415,6 +564,69 @@ class CuttingEngine {
         notes: notes);
   }
 
+  static List<SheetLayout> _packSheets(
+      List<Part> order, Project p, double usableW, double usableH) {
+    final sheets = <SheetLayout>[];
+    for (final part in order) {
+      if (part.a <= 0 || part.b <= 0 || usableW <= 0 || usableH <= 0) {
+        continue;
+      }
+      SheetLayout? selectedSheet;
+      PlacedPart? selectedSpot;
+      var selectedScore = double.infinity;
+      for (final sheet in sheets) {
+        final spot =
+            _findSpot(sheet.placements, part, usableW, usableH, p.kerf);
+        if (spot == null) continue;
+        final score = _sheetAddedBounds(sheet, spot);
+        if (score < selectedScore) {
+          selectedSheet = sheet;
+          selectedSpot = spot;
+          selectedScore = score;
+        }
+      }
+      if (selectedSheet == null) {
+        selectedSheet = SheetLayout(
+            sheets.length + 1, [], p.stock.width, p.stock.height, 0);
+        selectedSpot =
+            _findSpot(selectedSheet.placements, part, usableW, usableH, p.kerf);
+        if (selectedSpot == null) continue;
+        sheets.add(selectedSheet);
+      }
+      final spot = selectedSpot;
+      if (spot == null) continue;
+      selectedSheet.placements.add(PlacedPart(
+          part.name, spot.x, spot.y, spot.w, spot.h,
+          rotated: spot.rotated,
+          partId: part.id,
+          pieceIndex: part.pieceIndex!,
+          isCut: p.cutPieces.contains('${part.id}:${part.pieceIndex}')));
+      selectedSheet.usedArea += part.a * part.b;
+    }
+    return sheets;
+  }
+
+  static double _sheetAddedBounds(SheetLayout sheet, PlacedPart part) {
+    var maxX = part.x + part.w;
+    var maxY = part.y + part.h;
+    for (final old in sheet.placements) {
+      maxX = math.max(maxX, old.x + old.w);
+      maxY = math.max(maxY, old.y + old.h);
+    }
+    return maxX * maxY;
+  }
+
+  static double _sheetCompactnessScore(List<SheetLayout> sheets) =>
+      sheets.fold<double>(0, (score, sheet) {
+        var maxX = 0.0;
+        var maxY = 0.0;
+        for (final part in sheet.placements) {
+          maxX = math.max(maxX, part.x + part.w);
+          maxY = math.max(maxY, part.y + part.h);
+        }
+        return score + maxX * maxY;
+      });
+
   static PlacedPart? _findSpot(List<PlacedPart> placed, Part part, double maxW,
       double maxH, double kerf) {
     final candidates = <Offset>[const Offset(0, 0)];
@@ -422,8 +634,10 @@ class CuttingEngine {
       candidates.add(Offset(p.x + p.w + kerf, p.y));
       candidates.add(Offset(p.x, p.y + p.h + kerf));
     }
-    candidates
-        .sort((a, b) => (a.dy * 100000 + a.dx).compareTo(b.dy * 100000 + b.dx));
+    candidates.sort((a, b) {
+      final byY = a.dy.compareTo(b.dy);
+      return byY != 0 ? byY : a.dx.compareTo(b.dx);
+    });
     for (final point in candidates) {
       for (final rotated in [false, true]) {
         if (rotated && (!part.rotate || part.a == part.b)) continue;
@@ -434,7 +648,9 @@ class CuttingEngine {
             .overlaps(Rect.fromLTWH(old.x, old.y, old.w + kerf, old.h + kerf)));
         if (!collision) {
           return PlacedPart(part.name, point.dx, point.dy, w, h,
-              rotated: rotated);
+              rotated: rotated,
+              partId: part.id,
+              pieceIndex: part.pieceIndex ?? 0);
         }
       }
     }
@@ -449,6 +665,7 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell> {
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   int _page = 0;
   bool _loading = true;
   final List<Project> _projects = [];
@@ -789,54 +1006,195 @@ class _AppShellState extends State<AppShell> {
 
   Future<StockConfig?> _stockEditor(StockConfig? existing) async {
     final original = existing;
-    final name = TextEditingController(text: original?.name ?? 'New stock type');
-    final width = TextEditingController(text: (original?.width ?? 6000).toString());
-    final height = TextEditingController(text: (original?.height ?? (_active?.mode == CutMode.sheet ? 1220 : 0)).toString());
-    final quantity = TextEditingController(text: (original?.quantity ?? 0).toString());
-    final price = TextEditingController(text: (original?.price ?? 0).toString());
-    final kerf = TextEditingController(text: (original?.kerf ?? _active?.kerf ?? 3).toString());
-    final trim = TextEditingController(text: (original?.trim ?? _active?.trim ?? 0).toString());
+    final name =
+        TextEditingController(text: original?.name ?? 'New stock type');
+    final width =
+        TextEditingController(text: (original?.width ?? 6000).toString());
+    final height = TextEditingController(
+        text: (original?.height ?? (_active?.mode == CutMode.sheet ? 1220 : 0))
+            .toString());
+    final quantity =
+        TextEditingController(text: (original?.quantity ?? 0).toString());
+    final price =
+        TextEditingController(text: (original?.price ?? 0).toString());
+    final kerf = TextEditingController(
+        text: (original?.kerf ?? _active?.kerf ?? 3).toString());
+    final trim = TextEditingController(
+        text: (original?.trim ?? _active?.trim ?? 0).toString());
     final p = _active!;
-    return showDialog<StockConfig>(context: context, builder: (context) => AlertDialog(
-      title: Text(original == null ? 'Add stock type' : 'Edit stock type'),
-      content: SizedBox(width: 420, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        TextField(controller: name, decoration: const InputDecoration(labelText: 'Stock type / profile name')),
-        const SizedBox(height: 10),
-        TextField(controller: width, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: p.mode == CutMode.linear ? 'Stock length (${p.unit})' : 'Sheet width (${p.unit})')),
-        if (p.mode == CutMode.sheet) ...[const SizedBox(height: 10), TextField(controller: height, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: 'Sheet height (${p.unit})'))],
-        const SizedBox(height: 10),
-        Row(children: [Expanded(child: TextField(controller: quantity, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Available qty (0 = auto)'))), const SizedBox(width: 10), Expanded(child: TextField(controller: price, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Cost per unit')))]),
-        const SizedBox(height: 10),
-        Row(children: [Expanded(child: TextField(controller: kerf, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: 'Cut kerf (${p.unit})'))), const SizedBox(width: 10), Expanded(child: TextField(controller: trim, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: 'Edge trim (${p.unit})')))]),
-      ]))),
-      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')), FilledButton(onPressed: () {
-        final w = _num(width.text, 0); final h = p.mode == CutMode.sheet ? _num(height.text, 0) : 0.0;
-        final q = int.tryParse(quantity.text) ?? 0;
-        if (name.text.trim().isEmpty || w <= 0 || (p.mode == CutMode.sheet && h <= 0) || q < 0) return;
-        Navigator.pop(context, StockConfig(id: original?.id, name: name.text.trim(), width: w, height: h, quantity: q, price: _num(price.text, 0), kerf: _num(kerf.text, 0), trim: _num(trim.text, 0)));
-      }, child: const Text('Save stock'))],
-    ));
+    return showDialog<StockConfig>(
+        context: context,
+        builder: (context) => AlertDialog(
+              title:
+                  Text(original == null ? 'Add stock type' : 'Edit stock type'),
+              content: SizedBox(
+                  width: 420,
+                  child: SingleChildScrollView(
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    TextField(
+                        controller: name,
+                        decoration: const InputDecoration(
+                            labelText: 'Stock type / profile name')),
+                    const SizedBox(height: 10),
+                    TextField(
+                        controller: width,
+                        keyboardType: TextInputType.number,
+                        decoration: InputDecoration(
+                            labelText: p.mode == CutMode.linear
+                                ? 'Stock length (${p.unit})'
+                                : 'Sheet width (${p.unit})')),
+                    if (p.mode == CutMode.sheet) ...[
+                      const SizedBox(height: 10),
+                      TextField(
+                          controller: height,
+                          keyboardType: TextInputType.number,
+                          decoration: InputDecoration(
+                              labelText: 'Sheet height (${p.unit})'))
+                    ],
+                    const SizedBox(height: 10),
+                    Row(children: [
+                      Expanded(
+                          child: TextField(
+                              controller: quantity,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                  labelText: 'Available qty (0 = auto)'))),
+                      const SizedBox(width: 10),
+                      Expanded(
+                          child: TextField(
+                              controller: price,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                  labelText: 'Cost per unit')))
+                    ]),
+                    const SizedBox(height: 10),
+                    Row(children: [
+                      Expanded(
+                          child: TextField(
+                              controller: kerf,
+                              keyboardType: TextInputType.number,
+                              decoration: InputDecoration(
+                                  labelText: 'Cut kerf (${p.unit})'))),
+                      const SizedBox(width: 10),
+                      Expanded(
+                          child: TextField(
+                              controller: trim,
+                              keyboardType: TextInputType.number,
+                              decoration: InputDecoration(
+                                  labelText: 'Edge trim (${p.unit})')))
+                    ]),
+                  ]))),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cancel')),
+                FilledButton(
+                    onPressed: () {
+                      final w = _num(width.text, 0);
+                      final h =
+                          p.mode == CutMode.sheet ? _num(height.text, 0) : 0.0;
+                      final q = int.tryParse(quantity.text) ?? 0;
+                      if (name.text.trim().isEmpty ||
+                          w <= 0 ||
+                          (p.mode == CutMode.sheet && h <= 0) ||
+                          q < 0) {
+                        return;
+                      }
+                      Navigator.pop(
+                          context,
+                          StockConfig(
+                              id: original?.id,
+                              name: name.text.trim(),
+                              width: w,
+                              height: h,
+                              quantity: q,
+                              price: _num(price.text, 0),
+                              kerf: _num(kerf.text, 0),
+                              trim: _num(trim.text, 0)));
+                    },
+                    child: const Text('Save stock'))
+              ],
+            ));
   }
 
   Future<void> _manageStocks() async {
     final p = _active;
     if (p == null) return;
-    await showDialog<void>(context: context, builder: (dialogContext) => StatefulBuilder(builder: (context, refresh) => AlertDialog(
-      title: const Text('Stock types'),
-      content: SizedBox(width: 520, child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Flexible(child: ListView(shrinkWrap: true, children: [for (final stock in p.stocks) ListTile(
-          leading: const Icon(Icons.inventory_2_outlined),
-          title: Text(stock.name),
-          subtitle: Text(p.mode == CutMode.linear ? '${stock.width} ${p.unit} • Qty ${stock.quantity == 0 ? 'auto' : stock.quantity} • Kerf/trim ${stock.kerf}/${stock.trim}' : '${stock.width} × ${stock.height} ${p.unit} • Qty ${stock.quantity == 0 ? 'auto' : stock.quantity} • Kerf/trim ${stock.kerf}/${stock.trim}'),
-          trailing: Wrap(children: [IconButton(tooltip: 'Edit stock type', icon: const Icon(Icons.edit_outlined), onPressed: () async { final updated = await _stockEditor(stock); if (updated != null) { final i = p.stocks.indexWhere((s) => s.id == stock.id); if (i >= 0) p.stocks[i] = updated; refresh(() {}); } }), IconButton(tooltip: 'Remove stock type', icon: const Icon(Icons.delete_outline), onPressed: p.stocks.length <= 1 ? null : () { final replacement = p.stocks.firstWhere((s) => s.id != stock.id); for (final part in p.parts.where((part) => part.stockId == stock.id)) { part.stockId = replacement.id; } p.stocks.removeWhere((s) => s.id == stock.id); refresh(() {}); })]),
-        )])),
-        const SizedBox(height: 8),
-        Align(alignment: Alignment.centerLeft, child: OutlinedButton.icon(onPressed: () async { final stock = await _stockEditor(null); if (stock != null) { p.stocks.add(stock); refresh(() {}); } }, icon: const Icon(Icons.add), label: const Text('Add stock type'))),
-        const SizedBox(height: 4),
-        const Text('Each part is optimised only against its assigned stock type.', style: TextStyle(color: muted, fontSize: 12)),
-      ])),
-      actions: [FilledButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Done'))],
-    )));
+    await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+            builder: (context, refresh) => AlertDialog(
+                  title: const Text('Stock types'),
+                  content: SizedBox(
+                      width: 520,
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        Flexible(
+                            child: ListView(shrinkWrap: true, children: [
+                          for (final stock in p.stocks)
+                            ListTile(
+                              leading: const Icon(Icons.inventory_2_outlined),
+                              title: Text(stock.name),
+                              subtitle: Text(p.mode == CutMode.linear
+                                  ? '${stock.width} ${p.unit} • Qty ${stock.quantity == 0 ? 'auto' : stock.quantity} • Kerf/trim ${stock.kerf}/${stock.trim}'
+                                  : '${stock.width} × ${stock.height} ${p.unit} • Qty ${stock.quantity == 0 ? 'auto' : stock.quantity} • Kerf/trim ${stock.kerf}/${stock.trim}'),
+                              trailing: Wrap(children: [
+                                IconButton(
+                                    tooltip: 'Edit stock type',
+                                    icon: const Icon(Icons.edit_outlined),
+                                    onPressed: () async {
+                                      final updated = await _stockEditor(stock);
+                                      if (updated != null) {
+                                        final i = p.stocks.indexWhere(
+                                            (s) => s.id == stock.id);
+                                        if (i >= 0) p.stocks[i] = updated;
+                                        refresh(() {});
+                                      }
+                                    }),
+                                IconButton(
+                                    tooltip: 'Remove stock type',
+                                    icon: const Icon(Icons.delete_outline),
+                                    onPressed: p.stocks.length <= 1
+                                        ? null
+                                        : () {
+                                            final replacement = p.stocks
+                                                .firstWhere(
+                                                    (s) => s.id != stock.id);
+                                            for (final part in p.parts.where(
+                                                (part) =>
+                                                    part.stockId == stock.id)) {
+                                              part.stockId = replacement.id;
+                                            }
+                                            p.stocks.removeWhere(
+                                                (s) => s.id == stock.id);
+                                            refresh(() {});
+                                          })
+                              ]),
+                            )
+                        ])),
+                        const SizedBox(height: 8),
+                        Align(
+                            alignment: Alignment.centerLeft,
+                            child: OutlinedButton.icon(
+                                onPressed: () async {
+                                  final stock = await _stockEditor(null);
+                                  if (stock != null) {
+                                    p.stocks.add(stock);
+                                    refresh(() {});
+                                  }
+                                },
+                                icon: const Icon(Icons.add),
+                                label: const Text('Add stock type'))),
+                        const SizedBox(height: 4),
+                        const Text(
+                            'Each part is optimised only against its assigned stock type.',
+                            style: TextStyle(color: muted, fontSize: 12)),
+                      ])),
+                  actions: [
+                    FilledButton(
+                        onPressed: () => Navigator.pop(dialogContext),
+                        child: const Text('Done'))
+                  ],
+                )));
     p.updated = _date();
     setState(() => _result = null);
     await _save();
@@ -874,8 +1232,12 @@ class _AppShellState extends State<AppShell> {
                 DropdownButtonFormField<String>(
                   initialValue: selectedStockId,
                   decoration: const InputDecoration(labelText: 'Stock type'),
-                  items: [for (final stock in p.stocks) DropdownMenuItem(value: stock.id, child: Text(stock.name))],
-                  onChanged: (value) => refresh(() => selectedStockId = value ?? p.stocks.first.id),
+                  items: [
+                    for (final stock in p.stocks)
+                      DropdownMenuItem(value: stock.id, child: Text(stock.name))
+                  ],
+                  onChanged: (value) => refresh(
+                      () => selectedStockId = value ?? p.stocks.first.id),
                 ),
                 const SizedBox(height: 10),
                 Row(
@@ -973,8 +1335,37 @@ class _AppShellState extends State<AppShell> {
     setState(() => _page = 4);
   }
 
+  Future<void> _togglePartCut(PlacedPart part) async {
+    await _togglePartsCut([part]);
+  }
+
+  Future<void> _togglePartsCut(Iterable<PlacedPart> parts) async {
+    final project = _active;
+    final pieces = parts.toList();
+    if (project == null || pieces.isEmpty) return;
+    setState(() {
+      final markCut = !pieces.first.isCut;
+      for (final part in pieces) {
+        if (markCut) {
+          project.cutPieces.add(part.cutKey);
+        } else {
+          project.cutPieces.remove(part.cutKey);
+        }
+      }
+      project.updated = _date();
+      _result = CuttingEngine.solve(project);
+    });
+    await _save();
+  }
+
   void _toast(String msg) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+
+  double _trimForStock(Project project, String stockName) => project.stocks
+      .firstWhere((stock) => stock.name == stockName,
+          orElse: () => project.stock)
+      .trim;
+
   Future<void> _exportCsv() async {
     final p = _active;
     final r = _result;
@@ -1003,13 +1394,29 @@ class _AppShellState extends State<AppShell> {
     if (r.mode == CutMode.linear) {
       for (final s in r.linear) {
         for (final c in s.cuts) {
-          rows.add(['${s.stockName} - Bar ${s.index}', c.name, c.x, 0, c.w, '', false]);
+          rows.add([
+            '${s.stockName} - Bar ${s.index}',
+            c.name,
+            c.x,
+            0,
+            c.w,
+            '',
+            false
+          ]);
         }
       }
     } else {
       for (final s in r.sheets) {
         for (final c in s.placements) {
-          rows.add(['${s.stockName} - Sheet ${s.index}', c.name, c.x, c.y, c.w, c.h, c.rotated]);
+          rows.add([
+            '${s.stockName} - Sheet ${s.index}',
+            c.name,
+            c.x,
+            c.y,
+            c.w,
+            c.h,
+            c.rotated
+          ]);
         }
       }
     }
@@ -1041,7 +1448,8 @@ class _AppShellState extends State<AppShell> {
           pw.SizedBox(height: 8),
           pw.Text('Project: ${p.name}'),
           pw.Text('Material: ${p.material} / ${p.variant}'),
-          pw.Text('Mode: ${p.mode.name} • Stock types: ${p.stocks.map((s) => s.name).join(', ')}'),
+          pw.Text(
+              'Mode: ${p.mode.name} • Stock types: ${p.stocks.map((s) => s.name).join(', ')}'),
           pw.Text('Generated: ${DateTime.now().toIso8601String()}'),
           pw.SizedBox(height: 12),
           pw.Container(
@@ -1059,8 +1467,14 @@ class _AppShellState extends State<AppShell> {
                 '${r.demandArea.toStringAsFixed(1)} ${p.unit}${p.mode == CutMode.sheet ? '²' : ''}'
               ],
               ['Estimated waste', '${(r.waste * 100).toStringAsFixed(1)}%'],
-              ['Stock-specific kerf', p.stocks.map((s) => '${s.name}: ${s.kerf} ${p.unit}').join('; ')],
-              ['Stock-specific trim', p.stocks.map((s) => '${s.name}: ${s.trim} ${p.unit}').join('; ')],
+              [
+                'Stock-specific kerf',
+                p.stocks.map((s) => '${s.name}: ${s.kerf} ${p.unit}').join('; ')
+              ],
+              [
+                'Stock-specific trim',
+                p.stocks.map((s) => '${s.name}: ${s.trim} ${p.unit}').join('; ')
+              ],
             ],
           ),
           pw.SizedBox(height: 12),
@@ -1117,64 +1531,127 @@ class _AppShellState extends State<AppShell> {
     if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    final wide = MediaQuery.sizeOf(context).width >= 920;
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final wide = screenWidth >= 920;
+    final compact = screenWidth < 600;
+    final useNavigationDrawer =
+        !wide && defaultTargetPlatform == TargetPlatform.android;
     final content = _buildPage();
+    final heading = Expanded(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            _pages[_page],
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+                fontSize: 20, fontWeight: FontWeight.w800, color: ink),
+          ),
+          Text(
+            _active == null
+                ? 'Create a project to get started'
+                : '${_active!.name}  •  ${_active!.material} / ${_active!.variant}',
+            maxLines: 1,
+            style: const TextStyle(color: muted, fontSize: 12),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+    final actions = <Widget>[
+      if (_active != null)
+        if (compact)
+          IconButton(
+            tooltip: 'Configure',
+            onPressed: _editProject,
+            icon: const Icon(Icons.tune),
+          )
+        else
+          OutlinedButton.icon(
+            onPressed: _editProject,
+            icon: const Icon(Icons.tune, size: 17),
+            label: const Text('Configure'),
+          ),
+      if (compact)
+        IconButton.filled(
+          tooltip: 'New project',
+          onPressed: _newProject,
+          icon: const Icon(Icons.add),
+        )
+      else
+        FilledButton.icon(
+          onPressed: _newProject,
+          icon: const Icon(Icons.add, size: 18),
+          label: const Text('New project'),
+        ),
+    ];
     return Scaffold(
+        key: _scaffoldKey,
+        drawer: useNavigationDrawer ? _navigationDrawer() : null,
         body: Row(children: [
-      if (wide) _sidebar(),
-      Expanded(
-          child: Column(children: [
-        if (!wide) _mobileHeader(),
-        Container(
-            height: 68,
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            color: Colors.white,
-            child: Row(children: [
-              Expanded(
-                  child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
+          if (wide) _sidebar(),
+          Expanded(
+              child: Column(children: [
+            if (!wide) _mobileHeader(useNavigationDrawer: useNavigationDrawer),
+            Container(
+              height: compact ? 108 : 68,
+              padding: EdgeInsets.symmetric(horizontal: compact ? 12 : 24),
+              color: Colors.white,
+              child: compact
+                  ? Column(
                       children: [
-                    Text(_pages[_page],
-                        style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w800,
-                            color: ink)),
-                    Text(
-                        _active == null
-                            ? 'Create a project to get started'
-                            : '${_active!.name}  •  ${_active!.material} / ${_active!.variant}',
-                        style: const TextStyle(color: muted, fontSize: 12),
-                        overflow: TextOverflow.ellipsis)
-                  ])),
-              if (_active != null)
-                OutlinedButton.icon(
-                    onPressed: _editProject,
-                    icon: const Icon(Icons.tune, size: 17),
-                    label: const Text('Configure')),
-              const SizedBox(width: 8),
-              FilledButton.icon(
-                  onPressed: _newProject,
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('New project'))
-            ])),
-        Expanded(
-            child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 180),
-                child: SingleChildScrollView(
-                    key: ValueKey(_page),
-                    padding: const EdgeInsets.all(22),
-                    child: content)))
-      ]))
-    ]));
+                        SizedBox(height: 48, child: Row(children: [heading])),
+                        const SizedBox(height: 4),
+                        SizedBox(
+                          height: 44,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: actions,
+                          ),
+                        ),
+                      ],
+                    )
+                  : Row(children: [
+                      heading,
+                      if (_active != null)
+                        OutlinedButton.icon(
+                          onPressed: _editProject,
+                          icon: const Icon(Icons.tune, size: 17),
+                          label: const Text('Configure'),
+                        ),
+                      const SizedBox(width: 8),
+                      FilledButton.icon(
+                        onPressed: _newProject,
+                        icon: const Icon(Icons.add, size: 18),
+                        label: const Text('New project'),
+                      ),
+                    ]),
+            ),
+            Expanded(
+                child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 180),
+                    child: SingleChildScrollView(
+                        key: ValueKey(_page),
+                        padding: EdgeInsets.all(compact ? 12 : 22),
+                        child: content)))
+          ]))
+        ]));
   }
 
-  Widget _mobileHeader() => Container(
+  Widget _mobileHeader({required bool useNavigationDrawer}) => Container(
       height: 56,
       color: ink,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(children: [
-        const Icon(Icons.cut, color: orange),
+        if (useNavigationDrawer)
+          IconButton(
+            tooltip: 'Open navigation menu',
+            onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+            icon: const Icon(Icons.menu, color: Colors.white),
+          ),
+        const SawBladeIcon(size: 22, bladeColor: orange, hubColor: ink),
         const SizedBox(width: 10),
         const Text('CUT OPTIMISER',
             style: TextStyle(
@@ -1182,14 +1659,78 @@ class _AppShellState extends State<AppShell> {
                 fontWeight: FontWeight.w800,
                 letterSpacing: 1)),
         const Spacer(),
-        PopupMenuButton<int>(
-            iconColor: Colors.white,
-            onSelected: _selectPage,
-            itemBuilder: (_) => [
-                  for (var i = 0; i < _pages.length; i++)
-                    PopupMenuItem(value: i, child: Text(_pages[i]))
-                ])
+        if (!useNavigationDrawer)
+          PopupMenuButton<int>(
+              iconColor: Colors.white,
+              onSelected: _selectPage,
+              itemBuilder: (_) => [
+                    for (var i = 0; i < _pages.length; i++)
+                      PopupMenuItem(value: i, child: Text(_pages[i]))
+                  ])
       ]));
+
+  Widget _navigationDrawer() => Drawer(
+        child: SafeArea(
+          child: Column(
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
+                color: ink,
+                child: const Row(
+                  children: [
+                    SawBladeIcon(size: 28, bladeColor: orange, hubColor: ink),
+                    SizedBox(width: 12),
+                    Text(
+                      'CUT OPTIMISER',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 20, 20, 8),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'WORKSPACE',
+                    style: TextStyle(
+                      color: muted,
+                      fontSize: 11,
+                      letterSpacing: 1.2,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: ListView(
+                  padding: EdgeInsets.zero,
+                  children: [
+                    for (var i = 0; i < _pages.length; i++)
+                      ListTile(
+                        selected: _page == i,
+                        selectedColor: orange,
+                        selectedTileColor: const Color(0xFFFFF1E7),
+                        leading: Icon(_icons[i]),
+                        title: Text(_pages[i]),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _selectPage(i);
+                        },
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+
   Widget _sidebar() => Container(
       width: 230,
       color: ink,
@@ -1202,7 +1743,8 @@ class _AppShellState extends State<AppShell> {
                   height: 36,
                   decoration: BoxDecoration(
                       color: orange, borderRadius: BorderRadius.circular(10)),
-                  child: const Icon(Icons.cut, color: ink, size: 22)),
+                  child: const SawBladeIcon(
+                      size: 22, bladeColor: ink, hubColor: orange)),
               const SizedBox(width: 10),
               const Expanded(
                   child: Text('CUT\nOPTIMISER',
@@ -1317,7 +1859,7 @@ class _AppShellState extends State<AppShell> {
             crossAxisCount: n,
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
-            childAspectRatio: n == 1 ? 4.1 : 1.8,
+            childAspectRatio: n == 1 ? 3.3 : 1.8,
             crossAxisSpacing: 12,
             mainAxisSpacing: 12,
             children: [
@@ -1401,6 +1943,7 @@ class _AppShellState extends State<AppShell> {
                           const SizedBox(height: 14),
                           DropdownButtonFormField<String>(
                             initialValue: _active?.id,
+                            isExpanded: true,
                             decoration: const InputDecoration(
                                 labelText: 'Select project'),
                             items: [
@@ -1569,16 +2112,21 @@ class _AppShellState extends State<AppShell> {
                         OutlinedButton.icon(
                             onPressed: _manageStocks,
                             icon: const Icon(Icons.category_outlined),
-                            label: Text('Manage stock types (${_active!.stocks.length})')),
+                            label: Text(
+                                'Manage stock types (${_active!.stocks.length})')),
                         const SizedBox(height: 10),
                         for (final stock in _active!.stocks)
-                          ListTile(dense: true, contentPadding: EdgeInsets.zero,
-                            leading: const Icon(Icons.inventory_2_outlined),
-                            title: Text(stock.name),
-                            subtitle: Text(_active!.mode == CutMode.linear
-                              ? 'Length ${stock.width} ${_active!.unit}'
-                              : '${stock.width} × ${stock.height} ${_active!.unit}'),
-                            trailing: Text(stock.price == 0 ? '' : stock.price.toStringAsFixed(2)))
+                          ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.inventory_2_outlined),
+                              title: Text(stock.name),
+                              subtitle: Text(_active!.mode == CutMode.linear
+                                  ? 'Length ${stock.width} ${_active!.unit}'
+                                  : '${stock.width} × ${stock.height} ${_active!.unit}'),
+                              trailing: Text(stock.price == 0
+                                  ? ''
+                                  : stock.price.toStringAsFixed(2)))
                       ]))),
         const SizedBox(height: 16),
         const PrototypeNotice()
@@ -1666,7 +2214,8 @@ class _AppShellState extends State<AppShell> {
                             ? 'Length ${part.a} ${p.unit}'
                             : '${part.a} × ${part.b} ${p.unit}${part.rotate ? ' • rotation allowed' : ''}',
                         style: const TextStyle(fontSize: 12, color: muted)),
-                    Text('Stock: ${p.stocks.firstWhere((s) => s.id == part.stockId, orElse: () => p.stock).name}',
+                    Text(
+                        'Stock: ${p.stocks.firstWhere((s) => s.id == part.stockId, orElse: () => p.stock).name}',
                         style: const TextStyle(fontSize: 12, color: muted))
                   ])),
           Text('× ${part.quantity}',
@@ -1694,24 +2243,40 @@ class _AppShellState extends State<AppShell> {
     var stockId = part.stockId;
     final ok = await showDialog<bool>(
       context: context,
-      builder: (c) => StatefulBuilder(builder: (context, refresh) => AlertDialog(
-        title: Text('Edit ${part.name}'),
-        content: SizedBox(width: 360, child: Column(mainAxisSize: MainAxisSize.min, children: [
-          TextField(controller: ctl, keyboardType: TextInputType.number,
-            decoration: const InputDecoration(labelText: 'Quantity')),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<String>(
-            initialValue: stockId,
-            decoration: const InputDecoration(labelText: 'Stock type'),
-            items: [for (final stock in p.stocks) DropdownMenuItem(value: stock.id, child: Text(stock.name))],
-            onChanged: (value) => refresh(() => stockId = value ?? p.stocks.first.id),
-          ),
-        ])),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Save')),
-        ],
-      )),
+      builder: (c) => StatefulBuilder(
+          builder: (context, refresh) => AlertDialog(
+                title: Text('Edit ${part.name}'),
+                content: SizedBox(
+                    width: 360,
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      TextField(
+                          controller: ctl,
+                          keyboardType: TextInputType.number,
+                          decoration:
+                              const InputDecoration(labelText: 'Quantity')),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        initialValue: stockId,
+                        decoration:
+                            const InputDecoration(labelText: 'Stock type'),
+                        items: [
+                          for (final stock in p.stocks)
+                            DropdownMenuItem(
+                                value: stock.id, child: Text(stock.name))
+                        ],
+                        onChanged: (value) =>
+                            refresh(() => stockId = value ?? p.stocks.first.id),
+                      ),
+                    ])),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(c, false),
+                      child: const Text('Cancel')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(c, true),
+                      child: const Text('Save')),
+                ],
+              )),
     );
     if (ok == true) {
       final n = int.tryParse(ctl.text) ?? 0;
@@ -1813,7 +2378,7 @@ class _AppShellState extends State<AppShell> {
                 physics: const NeverScrollableScrollPhysics(),
                 crossAxisSpacing: 12,
                 mainAxisSpacing: 12,
-                childAspectRatio: n == 1 ? 4.5 : 1.8,
+                childAspectRatio: n == 1 ? 3.3 : 1.8,
                 children: [
                   MetricCard('Stock units', '${r.stockCount}',
                       Icons.inventory_2_outlined, orange),
@@ -1922,6 +2487,28 @@ class _AppShellState extends State<AppShell> {
           const EmptyState('No placements',
               'Check that part dimensions fit the configured stock.')
         else ...[
+          Builder(builder: (context) {
+            final pieces = r.mode == CutMode.linear
+                ? r.linear.expand((stick) => stick.cuts).toList()
+                : r.sheets.expand((sheet) => sheet.placements).toList();
+            final cutCount = pieces.where((part) => part.isCut).length;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Row(
+                children: [
+                  const Icon(Icons.touch_app_outlined, color: muted, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Tap a part in the diagram or list to mark it cut. '
+                      '$cutCount of ${pieces.length} placed parts marked cut.',
+                      style: const TextStyle(color: muted, fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
@@ -1929,25 +2516,31 @@ class _AppShellState extends State<AppShell> {
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: const Color(0xFFE0E6EC)),
             ),
-            child: Row(
+            child: Wrap(
+              spacing: 16,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                Container(
-                    width: 12,
-                    height: 12,
-                    decoration: BoxDecoration(
-                        color: orange, borderRadius: BorderRadius.circular(3))),
-                const SizedBox(width: 6),
-                const Text('Part', style: TextStyle(fontSize: 12)),
-                const SizedBox(width: 16),
-                Container(
-                    width: 12,
-                    height: 12,
-                    decoration: BoxDecoration(
-                        color: const Color(0xFF6FB7A0),
-                        borderRadius: BorderRadius.circular(3))),
-                const SizedBox(width: 6),
-                const Text('Placed part', style: TextStyle(fontSize: 12)),
-                const Spacer(),
+                Row(mainAxisSize: MainAxisSize.min, children: [
+                  Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                          color: orange,
+                          borderRadius: BorderRadius.circular(3))),
+                  const SizedBox(width: 6),
+                  const Text('Uncut part', style: TextStyle(fontSize: 12)),
+                ]),
+                Row(mainAxisSize: MainAxisSize.min, children: [
+                  Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                          color: const Color(0xFF2F8D75),
+                          borderRadius: BorderRadius.circular(3))),
+                  const SizedBox(width: 6),
+                  const Text('Cut', style: TextStyle(fontSize: 12)),
+                ]),
                 Text('Dimensions in ${p.unit}',
                     style: const TextStyle(color: muted, fontSize: 11)),
               ],
@@ -1955,101 +2548,200 @@ class _AppShellState extends State<AppShell> {
           ),
           const SizedBox(height: 12),
           if (r.mode == CutMode.linear) ...[
-            for (final s in r.linear)
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Text('${s.stockName} — Bar ${s.index}',
-                              style:
-                                  const TextStyle(fontWeight: FontWeight.w800)),
-                          const Spacer(),
-                          Text(
-                            '${s.used.toStringAsFixed(1)} / ${(s.stockLength - 2 * p.stocks.firstWhere((stock) => stock.name == s.stockName, orElse: () => p.stock).trim).toStringAsFixed(1)} ${p.unit}',
-                            style: const TextStyle(fontSize: 12, color: muted),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        height: 74,
-                        width: double.infinity,
-                        child: CustomPaint(
-                            painter: LinearDiagramPainter(
-                                s: s, unit: p.unit, trim: p.stocks.firstWhere((stock) => stock.name == s.stockName, orElse: () => p.stock).trim)),
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: [
-                          for (final c in s.cuts)
-                            Chip(
-                              label: Text(
-                                  '${c.name}: ${c.w.toStringAsFixed(0)} ${p.unit}',
-                                  style: const TextStyle(fontSize: 11)),
-                              visualDensity: VisualDensity.compact,
-                            ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+            for (final group in groupLinearDiagrams(
+                r.linear, (stick) => _trimForStock(p, stick.stockName)))
+              _linearDiagramCard(group, p),
           ] else ...[
-            for (final s in r.sheets)
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Text('${s.stockName} — Sheet ${s.index}',
-                              style:
-                                  const TextStyle(fontWeight: FontWeight.w800)),
-                          const Spacer(),
-                          Text('${s.placements.length} pieces',
-                              style:
-                                  const TextStyle(color: muted, fontSize: 12)),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        height: 280,
-                        width: double.infinity,
-                        child: CustomPaint(
-                            painter: SheetDiagramPainter(
-                                s: s, trim: p.stocks.firstWhere((stock) => stock.name == s.stockName, orElse: () => p.stock).trim, unit: p.unit)),
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: [
-                          for (final c in s.placements)
-                            Chip(
-                              label: Text(
-                                  '${c.name} · ${c.w.toStringAsFixed(0)}×${c.h.toStringAsFixed(0)}',
-                                  style: const TextStyle(fontSize: 11)),
-                              visualDensity: VisualDensity.compact,
-                            ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+            for (final group in groupSheetDiagrams(
+                r.sheets, (sheet) => _trimForStock(p, sheet.stockName)))
+              _sheetDiagramCard(group, p),
           ],
           const SizedBox(height: 12),
           const PrototypeNotice(),
         ],
       ],
+    );
+  }
+
+  Widget _linearDiagramCard(List<LinearStick> group, Project project) {
+    final stick = group.first;
+    final trim = _trimForStock(project, stick.stockName);
+    final barNumbers = group.map((item) => item.index).join(', ');
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    group.length == 1
+                        ? '${stick.stockName} — Bar ${stick.index}'
+                        : '${stick.stockName} — ${group.length} identical bars',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '${stick.used.toStringAsFixed(1)} / ${(stick.stockLength - 2 * trim).toStringAsFixed(1)} ${project.unit}',
+                  style: const TextStyle(fontSize: 12, color: muted),
+                ),
+              ],
+            ),
+            if (group.length > 1)
+              Text('Bars: $barNumbers',
+                  style: const TextStyle(fontSize: 11, color: muted)),
+            const SizedBox(height: 12),
+            LayoutBuilder(builder: (context, constraints) {
+              final painter = LinearDiagramPainter(
+                  s: stick, unit: project.unit, trim: trim);
+              final size = Size(constraints.maxWidth, 74);
+              return SizedBox(
+                height: size.height,
+                width: size.width,
+                child: GestureDetector(
+                  onTapUp: (details) {
+                    final part = painter.partAt(size, details.localPosition);
+                    if (part != null) {
+                      final partIndex = stick.cuts.indexOf(part);
+                      _togglePartsCut(
+                          group.map((item) => item.cuts[partIndex]));
+                    }
+                  },
+                  child: CustomPaint(size: size, painter: painter),
+                ),
+              );
+            }),
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                'Offcut: ${stick.offcutLength(trim).toStringAsFixed(1)} ${project.unit}',
+                style: const TextStyle(
+                  color: muted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final item in group)
+                  for (final part in item.cuts)
+                    FilterChip(
+                      selected: part.isCut,
+                      selectedColor: const Color(0xFFD9EEE7),
+                      avatar: part.isCut
+                          ? const Icon(Icons.check_circle,
+                              size: 16, color: Color(0xFF2F8D75))
+                          : null,
+                      label: Text(
+                          '${group.length > 1 ? 'Bar ${item.index}: ' : ''}${part.name}: ${part.w.toStringAsFixed(0)} ${project.unit}${part.isCut ? ' · Cut' : ''}',
+                          style: const TextStyle(fontSize: 11)),
+                      visualDensity: VisualDensity.compact,
+                      onSelected: (_) => _togglePartCut(part),
+                    ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sheetDiagramCard(List<SheetLayout> group, Project project) {
+    final sheet = group.first;
+    final trim = _trimForStock(project, sheet.stockName);
+    final sheetNumbers = group.map((item) => item.index).join(', ');
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    group.length == 1
+                        ? '${sheet.stockName} — Sheet ${sheet.index}'
+                        : '${sheet.stockName} — ${group.length} identical sheets',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text('${sheet.placements.length} pieces',
+                    style: const TextStyle(color: muted, fontSize: 12)),
+              ],
+            ),
+            if (group.length > 1)
+              Text('Sheets: $sheetNumbers',
+                  style: const TextStyle(fontSize: 11, color: muted)),
+            const SizedBox(height: 12),
+            LayoutBuilder(builder: (context, constraints) {
+              final painter =
+                  SheetDiagramPainter(s: sheet, trim: trim, unit: project.unit);
+              final size = Size(constraints.maxWidth, 280);
+              return SizedBox(
+                height: size.height,
+                width: size.width,
+                child: GestureDetector(
+                  onTapUp: (details) {
+                    final part = painter.partAt(size, details.localPosition);
+                    if (part != null) {
+                      final partIndex = sheet.placements.indexOf(part);
+                      _togglePartsCut(
+                          group.map((item) => item.placements[partIndex]));
+                    }
+                  },
+                  child: CustomPaint(size: size, painter: painter),
+                ),
+              );
+            }),
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                'Unused stock area: ${sheet.unusedArea(trim).toStringAsFixed(1)} ${project.unit}²',
+                style: const TextStyle(
+                  color: muted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final item in group)
+                  for (final part in item.placements)
+                    FilterChip(
+                      selected: part.isCut,
+                      selectedColor: const Color(0xFFD9EEE7),
+                      avatar: part.isCut
+                          ? const Icon(Icons.check_circle,
+                              size: 16, color: Color(0xFF2F8D75))
+                          : null,
+                      label: Text(
+                          '${group.length > 1 ? 'Sheet ${item.index}: ' : ''}${part.name} · ${part.w.toStringAsFixed(0)}×${part.h.toStringAsFixed(0)}${part.isCut ? ' · Cut' : ''}',
+                          style: const TextStyle(fontSize: 11)),
+                      visualDensity: VisualDensity.compact,
+                      onSelected: (_) => _togglePartCut(part),
+                    ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -2114,6 +2806,19 @@ class LinearDiagramPainter extends CustomPainter {
   final LinearStick s;
   final String unit;
   final double trim;
+
+  PlacedPart? partAt(Size size, Offset position) {
+    const left = 8.0;
+    final top = 22.0, width = size.width - 16, height = 28.0;
+    final scale = width / s.stockLength;
+    for (final part in s.cuts.reversed) {
+      final rect =
+          Rect.fromLTWH(left + part.x * scale, top, part.w * scale, height);
+      if (rect.contains(position)) return part;
+    }
+    return null;
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
     final left = 8.0, top = 22.0, width = size.width - 16, height = 28.0;
@@ -2133,13 +2838,27 @@ class LinearDiagramPainter extends CustomPainter {
     for (var i = 0; i < s.cuts.length; i++) {
       final c = s.cuts[i];
       final rect = Rect.fromLTWH(left + c.x * scale, top, c.w * scale, height);
-      canvas.drawRect(rect, Paint()..color = colors[i % colors.length]);
+      canvas.drawRect(
+          rect,
+          Paint()
+            ..color =
+                c.isCut ? const Color(0xFF2F8D75) : colors[i % colors.length]);
+      if (c.isCut) {
+        canvas.drawRect(
+            rect,
+            Paint()
+              ..color = Colors.white
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1.5);
+      }
       if (rect.width > 30) {
         final tp = TextPainter(
             text: TextSpan(
-                text: c.name,
-                style: const TextStyle(
-                    fontSize: 10, color: ink, fontWeight: FontWeight.w700)),
+                text: c.isCut ? '${c.name} ✓' : c.name,
+                style: TextStyle(
+                    fontSize: 10,
+                    color: c.isCut ? Colors.white : ink,
+                    fontWeight: FontWeight.w700)),
             textDirection: TextDirection.ltr,
             maxLines: 1,
             ellipsis: '…')
@@ -2173,6 +2892,21 @@ class SheetDiagramPainter extends CustomPainter {
   final SheetLayout s;
   final double trim;
   final String unit;
+
+  PlacedPart? partAt(Size size, Offset position) {
+    const margin = 18.0;
+    final scale = math.min((size.width - 2 * margin) / s.stockW,
+        (size.height - 2 * margin) / s.stockH);
+    final w = s.stockW * scale, h = s.stockH * scale;
+    final ox = (size.width - w) / 2, oy = (size.height - h) / 2;
+    for (final part in s.placements.reversed) {
+      final rect = Rect.fromLTWH(ox + (trim + part.x) * scale,
+          oy + (trim + part.y) * scale, part.w * scale, part.h * scale);
+      if (rect.contains(position)) return part;
+    }
+    return null;
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
     const margin = 18.0;
@@ -2209,21 +2943,25 @@ class SheetDiagramPainter extends CustomPainter {
       final p = s.placements[i];
       final rect = Rect.fromLTWH(ox + (trim + p.x) * scale,
           oy + (trim + p.y) * scale, p.w * scale, p.h * scale);
-      canvas.drawRect(rect, Paint()..color = colors[i % colors.length]);
       canvas.drawRect(
           rect,
           Paint()
-            ..color = const Color(0xFF405268)
+            ..color =
+                p.isCut ? const Color(0xFF2F8D75) : colors[i % colors.length]);
+      canvas.drawRect(
+          rect,
+          Paint()
+            ..color = p.isCut ? Colors.white : const Color(0xFF405268)
             ..style = PaintingStyle.stroke
             ..strokeWidth = 1);
       if (rect.width > 32 && rect.height > 22) {
         final text = TextPainter(
             text: TextSpan(
                 text:
-                    '${p.name}\n${p.w.toStringAsFixed(0)}×${p.h.toStringAsFixed(0)}',
+                    '${p.name}${p.isCut ? ' ✓' : ''}\n${p.w.toStringAsFixed(0)}×${p.h.toStringAsFixed(0)}',
                 style: TextStyle(
                     fontSize: math.min(11, math.max(7, scale * 13)),
-                    color: ink,
+                    color: p.isCut ? Colors.white : ink,
                     fontWeight: FontWeight.w700)),
             textAlign: TextAlign.center,
             textDirection: TextDirection.ltr,
@@ -2264,6 +3002,66 @@ class SectionTitle extends StatelessWidget {
         Text(subtitle,
             style: const TextStyle(fontSize: 12, color: muted, height: 1.4))
       ]);
+}
+
+class SawBladeIcon extends StatelessWidget {
+  const SawBladeIcon({
+    super.key,
+    required this.size,
+    required this.bladeColor,
+    required this.hubColor,
+  });
+
+  final double size;
+  final Color bladeColor;
+  final Color hubColor;
+
+  @override
+  Widget build(BuildContext context) => CustomPaint(
+        size: Size.square(size),
+        painter: _SawBladePainter(bladeColor, hubColor),
+      );
+}
+
+class _SawBladePainter extends CustomPainter {
+  const _SawBladePainter(this.bladeColor, this.hubColor);
+
+  final Color bladeColor;
+  final Color hubColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.shortestSide / 2;
+    const teeth = 16;
+    final blade = Path();
+    for (var tooth = 0; tooth < teeth; tooth++) {
+      final angle = (tooth * 4 - 1) * math.pi / (teeth * 2);
+      final points = [
+        Offset(math.cos(angle) * radius * .78, math.sin(angle) * radius * .78),
+        Offset(math.cos(angle + math.pi / (teeth * 3)) * radius * .78,
+            math.sin(angle + math.pi / (teeth * 3)) * radius * .78),
+        Offset(math.cos(angle + math.pi / (teeth * 2)) * radius,
+            math.sin(angle + math.pi / (teeth * 2)) * radius),
+        Offset(math.cos(angle + math.pi / teeth) * radius * .78,
+            math.sin(angle + math.pi / teeth) * radius * .78),
+      ];
+      if (tooth == 0) {
+        blade.moveTo(center.dx + points.first.dx, center.dy + points.first.dy);
+      }
+      for (final point in points.skip(1)) {
+        blade.lineTo(center.dx + point.dx, center.dy + point.dy);
+      }
+    }
+    blade.close();
+    canvas.drawPath(blade, Paint()..color = bladeColor);
+    canvas.drawCircle(center, radius * .43, Paint()..color = hubColor);
+    canvas.drawCircle(center, radius * .16, Paint()..color = bladeColor);
+  }
+
+  @override
+  bool shouldRepaint(covariant _SawBladePainter oldDelegate) =>
+      oldDelegate.bladeColor != bladeColor || oldDelegate.hubColor != hubColor;
 }
 
 class MetricCard extends StatelessWidget {

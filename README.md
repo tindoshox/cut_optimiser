@@ -5,11 +5,15 @@ A responsive, offline-first Flutter prototype for cutting plans on **linear stoc
 ## Included
 
 - Dashboard with project and demand summaries.
+- Circular-saw branding with matching Android and Windows launcher icons.
 - Create and select local projects; configure project mode, material, variant/profile, stock format, available stock quantity, unit, kerf, trim and stock cost.
 - Add/remove parts and edit demand quantities.
-- Linear cutting: best-fit-decreasing heuristic with kerf and trim accounting.
-- Sheet cutting: area-sorted bottom-left style rectangle placement with optional 90° rotation, kerf and edge trim.
+- Linear cutting: compares best-fit and first-fit packing across descending, ascending and entered part orders, with kerf and trim accounting.
+- Sheet cutting: compares area, longest-side, width, height and perimeter part orders, then keeps the layout with the fewest sheets and best compactness; supports optional 90° rotation, kerf and edge trim.
 - Scaled linear and sheet diagrams.
+- Mark individual placed parts as cut directly on the diagrams or from their part chips; cut status is saved with the project.
+- Cutting diagrams label the remaining bar offcut length and the unused sheet area.
+- Identical bar and sheet layouts are grouped into a single diagram; individual part chips remain available for cut tracking.
 - Local persistence using `shared_preferences` (saved projects survive app restarts on the same device).
 - CSV cut-list export and printable/saveable PDF report.
 - Explicit status text stating that the heuristic candidate is **not proven globally optimal**.
