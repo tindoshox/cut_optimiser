@@ -35,6 +35,60 @@ Requires a current Flutter stable SDK and the platform toolchains for the target
 
 The archive includes app source and dependency configuration, not compiled platform binaries. Linux requires the Flutter Linux desktop prerequisites; Windows builds require Visual Studio with the C++ desktop workload; Android requires Android SDK/toolchain setup.
 
+## Android arm64 release build
+
+Build an arm64 APK on a Linux, macOS, or Windows host with Flutter stable and the Android SDK configured:
+
+```sh
+flutter pub get
+flutter analyze
+flutter test
+flutter build apk --release --split-per-abi --target-platform android-arm64
+```
+
+The arm64 APK is written to `build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`. Without signing configuration it is unsigned and must be signed before installation or distribution. To sign release builds, create and securely back up an upload keystore, then add the following ignored local file at `android/key.properties` (keep all passwords and keystore files out of version control):
+
+```properties
+storePassword=<keystore-password>
+keyPassword=<key-password>
+keyAlias=upload
+storeFile=upload-keystore.jks
+```
+
+Place the keystore at `android/app/upload-keystore.jks`, or set `storeFile` to its path relative to `android/app`. Re-run the release build; Gradle signs it with that key. Do not lose the keystore or passwords: updates to an installed app must be signed with the same key. Before publishing, set a unique permanent Android application ID in `android/app/build.gradle.kts` and choose the release version/build number in `pubspec.yaml`.
+
+## Linux release build
+
+Build Linux releases on a Linux host with Flutter stable and the GTK 3 desktop development dependencies installed. On Ubuntu or Debian, install the prerequisites with:
+
+```sh
+sudo apt install clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev
+```
+
+Then build and verify the release:
+
+```sh
+flutter pub get
+flutter analyze
+flutter test
+flutter build linux --release
+```
+
+Distribute the complete `build/linux/x64/release/bundle` directory (or zip its contents); the executable depends on the accompanying `data` and `lib` directories. The bundle is unsigned and does not include an installer or desktop integration. It requires a compatible Linux system with GTK 3 libraries. Before publishing, choose the product version in `pubspec.yaml` and arrange package creation/signing if required by the distribution channel.
+
+## Windows release build
+
+Build Windows releases on a Windows host with Flutter stable and Visual Studio installed with the **Desktop development with C++** workload:
+
+```powershell
+flutter pub get
+flutter analyze
+flutter test
+flutter build windows --release
+```
+
+Distribute the complete `build\windows\x64\runner\Release` directory (or zip its contents); the executable depends on the accompanying Flutter runtime, `data` directory, and plugin libraries. The build is unsigned and does not include an installer. Before publishing, choose the product version in `pubspec.yaml` and arrange code signing or installer packaging if required by the distribution channel.
+
 ## First-run walkthrough
 
 A sample linear job is preloaded. Use **New project** to create a sheet job, configure stock dimensions, add rectangle parts, then choose **Optimisation results** → **Run optimiser**. View the diagram and export the CSV or PDF report. Projects are stored locally on the current device; they are not automatically shared between desktop and mobile.
