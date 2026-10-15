@@ -1,0 +1,40 @@
+name: Windows release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - run: flutter build windows --release
+
+      - name: Package Windows release
+        shell: pwsh
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath cut_optimiser-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cut_optimiser-windows-x64
+          path: cut_optimiser-windows-x64.zip
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$env:GITHUB_REF_NAME" cut_optimiser-windows-x64.zip --title "$env:GITHUB_REF_NAME" --generate-notes

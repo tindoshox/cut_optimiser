@@ -56,6 +56,7 @@ android {
                     }
 
                     storeFile = file(releaseSigningProperties.getProperty("storeFile"))
+                    storeType = "PKCS12"
                     storePassword = releaseSigningProperties.getProperty("storePassword")
                     keyAlias = releaseSigningProperties.getProperty("keyAlias")
                     keyPassword = releaseSigningProperties.getProperty("keyPassword")
