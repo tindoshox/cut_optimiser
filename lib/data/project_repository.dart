@@ -46,18 +46,20 @@ class SharedPreferencesProjectRepository implements ProjectRepository {
 
   @override
   Future<void> saveProjects(List<Project> projects) async {
-    final encoded = jsonEncode(projects.map((project) => {
-      'name': project.name,
-      'mode': project.mode.name,
-      'material': project.material,
-      'variant': project.variant,
-      'unit': project.unit,
-      'kerf': project.kerf,
-      'trim': project.trim,
-      'updated': project.updated,
-      'parts': project.parts.map((part) => part.toJson()).toList(),
-      'stocks': project.stocks.map((stock) => stock.toJson()).toList(),
-    }).toList());
+    final encoded = jsonEncode(projects
+        .map((project) => {
+              'name': project.name,
+              'mode': project.mode.name,
+              'material': project.material,
+              'variant': project.variant,
+              'unit': project.unit,
+              'kerf': project.kerf,
+              'trim': project.trim,
+              'updated': project.updated,
+              'parts': project.parts.map((part) => part.toJson()).toList(),
+              'stocks': project.stocks.map((stock) => stock.toJson()).toList(),
+            })
+        .toList());
 
     await _prefs.setString(_storageKey, encoded);
   }

@@ -37,6 +37,7 @@ void main() {
       'Cutting diagrams',
       'Reports',
       'Dashboard',
+      'About',
     ]) {
       await tester.tap(find.byType(PopupMenuButton<int>));
       await tester.pumpAndSettle();
@@ -45,6 +46,7 @@ void main() {
       final exception = tester.takeException();
       expect(exception, isNull, reason: '$page page overflows: $exception');
     }
+    expect(find.text('Copyright (C) 2026 Tendai Shoko'), findsOneWidget);
     debugDefaultTargetPlatformOverride = null;
   });
 

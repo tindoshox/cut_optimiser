@@ -1,7 +1,25 @@
+// Copyright (C) 2026 Tendai Shoko
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
+
 import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:csv/csv.dart';
+import 'package:cut_optimiser/domain/cut_optimiser_models.dart';
+import 'package:cut_optimiser/domain/cutting_engine.dart';
+import 'package:cut_optimiser/ui/cut_optimiser_widgets.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -10,16 +28,11 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-const ink = Color(0xFF101B2A);
-const panel = Color(0xFF182638);
-const orange = Color(0xFFFF812D);
-const canvas = Color(0xFFF2F5F8);
-const muted = Color(0xFF738195);
-
 void main() => runApp(const CutOptimiserApp());
 
 class CutOptimiserApp extends StatelessWidget {
   const CutOptimiserApp({super.key});
+
   @override
   Widget build(BuildContext context) => MaterialApp(
         title: 'Cut Optimiser',
@@ -55,609 +68,6 @@ class CutOptimiserApp extends StatelessWidget {
       );
 }
 
-enum CutMode { linear, sheet }
-
-class Part {
-  Part(
-      {required this.name,
-      required this.a,
-      this.b = 0,
-      this.quantity = 1,
-      this.rotate = true,
-      this.stockId = '',
-      String? id,
-      this.pieceIndex})
-      : id = id ?? DateTime.now().microsecondsSinceEpoch.toString();
-  final String id;
-  final int? pieceIndex;
-  String name;
-  double a;
-  double b;
-  int quantity;
-  bool rotate;
-  String stockId;
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'a': a,
-        'b': b,
-        'quantity': quantity,
-        'rotate': rotate,
-        'stockId': stockId
-      };
-  factory Part.fromJson(Map<String, dynamic> j) => Part(
-      id: j['id']?.toString(),
-      name: j['name'] ?? 'Part',
-      a: (j['a'] as num).toDouble(),
-      b: (j['b'] as num? ?? 0).toDouble(),
-      quantity: j['quantity'] ?? 1,
-      rotate: j['rotate'] ?? true,
-      stockId: j['stockId']?.toString() ?? '');
-}
-
-class StockConfig {
-  StockConfig(
-      {String? id,
-      this.name = 'Mild steel 25×25×1.6',
-      this.width = 6000,
-      this.height = 0,
-      this.quantity = 0,
-      this.price = 0,
-      this.kerf = 3,
-      this.trim = 0})
-      : id = id ?? DateTime.now().microsecondsSinceEpoch.toString();
-  final String id;
-  String name;
-  double width;
-  double height;
-  int quantity; // zero = calculate required quantity
-  double price;
-  double kerf;
-  double trim;
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'width': width,
-        'height': height,
-        'quantity': quantity,
-        'price': price,
-        'kerf': kerf,
-        'trim': trim
-      };
-  factory StockConfig.fromJson(Map<String, dynamic> j) => StockConfig(
-      id: j['id']?.toString(),
-      name: j['name'] ?? 'Stock',
-      width: (j['width'] as num? ?? 6000).toDouble(),
-      height: (j['height'] as num? ?? 0).toDouble(),
-      quantity: j['quantity'] ?? 0,
-      price: (j['price'] as num? ?? 0).toDouble(),
-      kerf: (j['kerf'] as num? ?? 3).toDouble(),
-      trim: (j['trim'] as num? ?? 0).toDouble());
-}
-
-class Project {
-  Project({
-    required this.name,
-    this.mode = CutMode.linear,
-    this.material = 'Mild steel',
-    this.variant = '25×25×1.6 mm',
-    this.unit = 'mm',
-    this.kerf = 3,
-    this.trim = 0,
-    List<Part>? parts,
-    StockConfig? stock,
-    List<StockConfig>? stocks,
-    Set<String>? cutPieces,
-    this.updated = '',
-  })  : parts = parts ?? [],
-        stocks = stocks ?? [stock ?? StockConfig()],
-        cutPieces = cutPieces ?? <String>{},
-        id = DateTime.now().microsecondsSinceEpoch.toString() {
-    _assignDefaultStock();
-  }
-
-  Project._({
-    required this.id,
-    required this.name,
-    required this.mode,
-    required this.material,
-    required this.variant,
-    required this.unit,
-    required this.kerf,
-    required this.trim,
-    required this.parts,
-    required this.stocks,
-    required this.cutPieces,
-    required this.updated,
-  }) {
-    _assignDefaultStock();
-  }
-
-  final String id;
-  String name;
-  CutMode mode;
-  String material;
-  String variant;
-  String unit;
-  double kerf;
-  double trim;
-  List<Part> parts;
-  List<StockConfig> stocks;
-  Set<String> cutPieces;
-  String updated;
-
-  // Backwards-compatible convenience accessor for legacy UI and saved projects.
-  StockConfig get stock => stocks.first;
-  set stock(StockConfig value) {
-    if (stocks.isEmpty) {
-      stocks = [value];
-    } else {
-      stocks[0] = value;
-    }
-    _assignDefaultStock();
-  }
-
-  void _assignDefaultStock() {
-    if (stocks.isEmpty) stocks.add(StockConfig());
-    for (final part in parts) {
-      if (!stocks.any((stock) => stock.id == part.stockId)) {
-        part.stockId = stocks.first.id;
-      }
-    }
-  }
-
-  Map<String, dynamic> toJson() => {
-        'id': id, 'name': name, 'mode': mode.name, 'material': material,
-        'variant': variant, 'unit': unit, 'kerf': kerf, 'trim': trim,
-        'parts': parts.map((p) => p.toJson()).toList(),
-        'stocks': stocks.map((s) => s.toJson()).toList(),
-        'cutPieces': cutPieces.toList(),
-        // Keep legacy key for compatibility with older app builds.
-        'stock': stock.toJson(), 'updated': updated,
-      };
-
-  factory Project.fromJson(Map<String, dynamic> j) {
-    final stockList = (j['stocks'] as List?)
-        ?.map((e) => StockConfig.fromJson(Map<String, dynamic>.from(e)))
-        .toList();
-    final legacyStock = StockConfig.fromJson(
-        Map<String, dynamic>.from(j['stock'] ?? {'width': 6000}));
-    final stocks = (stockList == null || stockList.isEmpty)
-        ? <StockConfig>[legacyStock]
-        : stockList;
-    if (stockList == null || stockList.isEmpty) {
-      legacyStock.kerf = (j['kerf'] as num? ?? 3).toDouble();
-      legacyStock.trim = (j['trim'] as num? ?? 0).toDouble();
-    }
-    final parts = ((j['parts'] as List?) ?? [])
-        .map((e) => Part.fromJson(Map<String, dynamic>.from(e)))
-        .toList();
-    for (final part in parts) {
-      if (part.stockId.isEmpty || !stocks.any((s) => s.id == part.stockId)) {
-        part.stockId = stocks.first.id;
-      }
-    }
-    return Project._(
-      id: j['id'] ?? DateTime.now().microsecondsSinceEpoch.toString(),
-      name: j['name'] ?? 'Untitled',
-      mode: CutMode.values
-          .firstWhere((m) => m.name == j['mode'], orElse: () => CutMode.linear),
-      material: j['material'] ?? 'Mild steel',
-      variant: j['variant'] ?? '',
-      unit: j['unit'] ?? 'mm',
-      kerf: (j['kerf'] as num? ?? 3).toDouble(),
-      trim: (j['trim'] as num? ?? 0).toDouble(),
-      parts: parts,
-      stocks: stocks,
-      cutPieces:
-          ((j['cutPieces'] as List?) ?? []).map((e) => e.toString()).toSet(),
-      updated: j['updated'] ?? '',
-    );
-  }
-  int get totalPieces => parts.fold(0, (sum, p) => sum + p.quantity);
-}
-
-class LinearStick {
-  LinearStick(this.index, this.cuts, this.used, this.stockLength,
-      {this.stockName = 'Stock'});
-  String stockName;
-  int index;
-  List<PlacedPart> cuts;
-  double used;
-  double stockLength;
-
-  double offcutLength(double trim) =>
-      math.max(0, stockLength - 2 * trim - used);
-}
-
-List<List<LinearStick>> groupLinearDiagrams(
-    List<LinearStick> diagrams, double Function(LinearStick) trimFor) {
-  final groups = <String, List<LinearStick>>{};
-  for (final diagram in diagrams) {
-    final key = jsonEncode([
-      diagram.stockName,
-      diagram.stockLength,
-      trimFor(diagram),
-      for (final part in diagram.cuts)
-        [
-          part.name,
-          part.x,
-          part.w,
-          part.isCut,
-        ],
-    ]);
-    groups.putIfAbsent(key, () => []).add(diagram);
-  }
-  return groups.values.toList();
-}
-
-class PlacedPart {
-  PlacedPart(this.name, this.x, this.y, this.w, this.h,
-      {this.rotated = false,
-      this.partId = '',
-      this.pieceIndex = 0,
-      this.isCut = false});
-  final String name;
-  final double x, y, w, h;
-  final bool rotated;
-  final String partId;
-  final int pieceIndex;
-  final bool isCut;
-  String get cutKey => '$partId:$pieceIndex';
-}
-
-class SheetLayout {
-  SheetLayout(
-      this.index, this.placements, this.stockW, this.stockH, this.usedArea,
-      {this.stockName = 'Stock'});
-  final String stockName;
-  final int index;
-  final List<PlacedPart> placements;
-  final double stockW, stockH;
-  double usedArea;
-
-  double unusedArea(double trim) =>
-      math.max(0, (stockW - 2 * trim) * (stockH - 2 * trim) - usedArea);
-}
-
-List<List<SheetLayout>> groupSheetDiagrams(
-    List<SheetLayout> diagrams, double Function(SheetLayout) trimFor) {
-  final groups = <String, List<SheetLayout>>{};
-  for (final diagram in diagrams) {
-    final key = jsonEncode([
-      diagram.stockName,
-      diagram.stockW,
-      diagram.stockH,
-      trimFor(diagram),
-      for (final part in diagram.placements)
-        [
-          part.name,
-          part.x,
-          part.y,
-          part.w,
-          part.h,
-          part.rotated,
-          part.isCut,
-        ],
-    ]);
-    groups.putIfAbsent(key, () => []).add(diagram);
-  }
-  return groups.values.toList();
-}
-
-class SolveResult {
-  SolveResult(
-      {required this.mode,
-      required this.linear,
-      required this.sheets,
-      required this.demandArea,
-      required this.totalStockArea,
-      required this.notes});
-  final CutMode mode;
-  final List<LinearStick> linear;
-  final List<SheetLayout> sheets;
-  final double demandArea, totalStockArea;
-  final List<String> notes;
-  int get stockCount => mode == CutMode.linear ? linear.length : sheets.length;
-  double get waste =>
-      totalStockArea <= 0 ? 0 : math.max(0, 1 - demandArea / totalStockArea);
-}
-
-class CuttingEngine {
-  static SolveResult solve(Project p) {
-    final allLinear = <LinearStick>[];
-    final allSheets = <SheetLayout>[];
-    final notes = <String>[];
-    var demand = 0.0;
-    var stockArea = 0.0;
-    for (final stock in p.stocks) {
-      final assigned =
-          p.parts.where((part) => part.stockId == stock.id).toList();
-      if (assigned.isEmpty) continue;
-      final sub = Project(
-          name: p.name,
-          mode: p.mode,
-          material: p.material,
-          variant: p.variant,
-          unit: p.unit,
-          kerf: stock.kerf,
-          trim: stock.trim,
-          parts: assigned,
-          stock: stock,
-          cutPieces: p.cutPieces);
-      final result = p.mode == CutMode.linear ? _linear(sub) : _sheets(sub);
-      demand += result.demandArea;
-      stockArea += result.totalStockArea;
-      notes.addAll(result.notes.map((n) => '${stock.name}: $n'));
-      if (p.mode == CutMode.linear) {
-        for (var i = 0; i < result.linear.length; i++) {
-          final layout = result.linear[i];
-          layout.stockName = stock.name;
-          layout.index = allLinear.length + 1;
-          allLinear.add(layout);
-        }
-      } else {
-        for (var i = 0; i < result.sheets.length; i++) {
-          final layout = result.sheets[i];
-          // Give sheets a project-wide index while retaining their stock format.
-          final combined = SheetLayout(allSheets.length + 1, layout.placements,
-              layout.stockW, layout.stockH, layout.usedArea,
-              stockName: stock.name);
-          allSheets.add(combined);
-        }
-      }
-    }
-    return SolveResult(
-        mode: p.mode,
-        linear: allLinear,
-        sheets: allSheets,
-        demandArea: demand,
-        totalStockArea: stockArea,
-        notes: notes);
-  }
-
-  static SolveResult _linear(Project p) {
-    final items = <Part>[];
-    for (final part in p.parts) {
-      for (var i = 0; i < part.quantity; i++) {
-        items.add(Part(id: part.id, pieceIndex: i, name: part.name, a: part.a));
-      }
-    }
-    final usable = p.stock.width - p.trim * 2;
-    final orders = <List<Part>>[
-      [...items]..sort((a, b) => b.a.compareTo(a.a)),
-      [...items]..sort((a, b) => a.a.compareTo(b.a)),
-      [...items],
-    ];
-    final candidates = <List<LinearStick>>[
-      for (final order in orders) ...[
-        _packLinear(order, p, usable, bestFit: true),
-        _packLinear(order, p, usable, bestFit: false),
-      ],
-    ];
-    candidates.sort((a, b) {
-      final count = a.length.compareTo(b.length);
-      if (count != 0) return count;
-      return _linearOffcutScore(a, usable)
-          .compareTo(_linearOffcutScore(b, usable));
-    });
-    final sticks = candidates.first;
-    final totalDemand = items.fold<double>(0, (s, i) => s + i.a);
-    final totalStock = sticks.length * usable;
-    final notes = <String>[
-      'Heuristic: best-fit/first-fit across descending, ascending and entered demand orders; not a proof of global optimality.'
-    ];
-    final oversized =
-        p.parts.where((part) => part.a > usable || part.a <= 0).toList();
-    if (oversized.isNotEmpty) {
-      notes.add(
-          'Invalid or infeasible parts skipped (non-positive or longer than usable stock): ${oversized.map((e) => e.name).join(', ')}.');
-    }
-    if (p.stock.quantity > 0 && sticks.length > p.stock.quantity) {
-      notes.add(
-          'Required stock exceeds configured available quantity (${p.stock.quantity}).');
-    }
-    return SolveResult(
-        mode: CutMode.linear,
-        linear: sticks,
-        sheets: [],
-        demandArea: totalDemand,
-        totalStockArea: totalStock,
-        notes: notes);
-  }
-
-  static List<LinearStick> _packLinear(
-      List<Part> order, Project p, double usable,
-      {required bool bestFit}) {
-    final sticks = <LinearStick>[];
-    for (final item in order) {
-      if (item.a <= 0 || item.a > usable) continue;
-      LinearStick? selected;
-      var bestRemaining = double.infinity;
-      for (final stick in sticks) {
-        final nextUsed =
-            stick.used + item.a + (stick.cuts.isEmpty ? 0 : p.kerf);
-        final remaining = usable - nextUsed;
-        if (remaining < -0.000001) continue;
-        if (selected == null || (bestFit && remaining < bestRemaining)) {
-          selected = stick;
-          bestRemaining = remaining;
-          if (!bestFit) break;
-        }
-      }
-      selected ??= LinearStick(sticks.length + 1, [], 0, p.stock.width);
-      if (!sticks.contains(selected)) sticks.add(selected);
-      final x = p.trim + selected.used + (selected.cuts.isEmpty ? 0 : p.kerf);
-      selected.cuts.add(PlacedPart(item.name, x, 0, item.a, 1,
-          partId: item.id,
-          pieceIndex: item.pieceIndex!,
-          isCut: p.cutPieces.contains('${item.id}:${item.pieceIndex}')));
-      selected.used += item.a + (selected.cuts.length == 1 ? 0 : p.kerf);
-    }
-    return sticks;
-  }
-
-  static double _linearOffcutScore(List<LinearStick> sticks, double usable) =>
-      sticks.fold<double>(
-          0,
-          (score, stick) =>
-              score + math.pow(math.max(0, usable - stick.used), 2).toDouble());
-
-  static SolveResult _sheets(Project p) {
-    final parts = <Part>[];
-    for (final part in p.parts) {
-      for (var i = 0; i < part.quantity; i++) {
-        parts.add(Part(
-            id: part.id,
-            pieceIndex: i,
-            name: part.name,
-            a: part.a,
-            b: part.b,
-            rotate: part.rotate));
-      }
-    }
-    final usableW = p.stock.width - 2 * p.trim;
-    final usableH = p.stock.height - 2 * p.trim;
-    final orders = <List<Part>>[
-      [...parts]..sort((a, b) => (b.a * b.b).compareTo(a.a * a.b)),
-      [...parts]
-        ..sort((a, b) => math.max(b.a, b.b).compareTo(math.max(a.a, a.b))),
-      [...parts]..sort((a, b) => b.a.compareTo(a.a)),
-      [...parts]..sort((a, b) => b.b.compareTo(a.b)),
-      [...parts]..sort((a, b) => (b.a + b.b).compareTo(a.a + a.b)),
-    ];
-    final candidates = orders
-        .map((order) => _packSheets(order, p, usableW, usableH))
-        .toList()
-      ..sort((a, b) {
-        final count = a.length.compareTo(b.length);
-        if (count != 0) return count;
-        return _sheetCompactnessScore(a).compareTo(_sheetCompactnessScore(b));
-      });
-    final sheets = candidates.first;
-    final demandArea = parts.fold<double>(0, (s, p) => s + p.a * p.b);
-    final totalArea = sheets.length * usableW * usableH;
-    final notes = <String>[
-      'Heuristic: best layout from area, longest-side, width, height and perimeter orderings; not a proof of global optimality.',
-      'Layouts show geometric nesting only. Guillotine cut sequence and machine-specific constraints are not implemented.'
-    ];
-    final invalid = parts
-        .where((part) => !(part.a > 0 &&
-            part.b > 0 &&
-            (part.a <= usableW && part.b <= usableH ||
-                (part.rotate && part.b <= usableW && part.a <= usableH))))
-        .toList();
-    if (invalid.isNotEmpty) {
-      notes.add(
-          'Parts that do not fit any sheet orientation were skipped: ${invalid.map((e) => e.name).join(', ')}.');
-    }
-    if (p.stock.quantity > 0 && sheets.length > p.stock.quantity) {
-      notes.add(
-          'Required sheets exceed configured available quantity (${p.stock.quantity}).');
-    }
-    return SolveResult(
-        mode: CutMode.sheet,
-        linear: [],
-        sheets: sheets,
-        demandArea: demandArea,
-        totalStockArea: totalArea,
-        notes: notes);
-  }
-
-  static List<SheetLayout> _packSheets(
-      List<Part> order, Project p, double usableW, double usableH) {
-    final sheets = <SheetLayout>[];
-    for (final part in order) {
-      if (part.a <= 0 || part.b <= 0 || usableW <= 0 || usableH <= 0) {
-        continue;
-      }
-      SheetLayout? selectedSheet;
-      PlacedPart? selectedSpot;
-      var selectedScore = double.infinity;
-      for (final sheet in sheets) {
-        final spot =
-            _findSpot(sheet.placements, part, usableW, usableH, p.kerf);
-        if (spot == null) continue;
-        final score = _sheetAddedBounds(sheet, spot);
-        if (score < selectedScore) {
-          selectedSheet = sheet;
-          selectedSpot = spot;
-          selectedScore = score;
-        }
-      }
-      if (selectedSheet == null) {
-        selectedSheet = SheetLayout(
-            sheets.length + 1, [], p.stock.width, p.stock.height, 0);
-        selectedSpot =
-            _findSpot(selectedSheet.placements, part, usableW, usableH, p.kerf);
-        if (selectedSpot == null) continue;
-        sheets.add(selectedSheet);
-      }
-      final spot = selectedSpot;
-      if (spot == null) continue;
-      selectedSheet.placements.add(PlacedPart(
-          part.name, spot.x, spot.y, spot.w, spot.h,
-          rotated: spot.rotated,
-          partId: part.id,
-          pieceIndex: part.pieceIndex!,
-          isCut: p.cutPieces.contains('${part.id}:${part.pieceIndex}')));
-      selectedSheet.usedArea += part.a * part.b;
-    }
-    return sheets;
-  }
-
-  static double _sheetAddedBounds(SheetLayout sheet, PlacedPart part) {
-    var maxX = part.x + part.w;
-    var maxY = part.y + part.h;
-    for (final old in sheet.placements) {
-      maxX = math.max(maxX, old.x + old.w);
-      maxY = math.max(maxY, old.y + old.h);
-    }
-    return maxX * maxY;
-  }
-
-  static double _sheetCompactnessScore(List<SheetLayout> sheets) =>
-      sheets.fold<double>(0, (score, sheet) {
-        var maxX = 0.0;
-        var maxY = 0.0;
-        for (final part in sheet.placements) {
-          maxX = math.max(maxX, part.x + part.w);
-          maxY = math.max(maxY, part.y + part.h);
-        }
-        return score + maxX * maxY;
-      });
-
-  static PlacedPart? _findSpot(List<PlacedPart> placed, Part part, double maxW,
-      double maxH, double kerf) {
-    final candidates = <Offset>[const Offset(0, 0)];
-    for (final p in placed) {
-      candidates.add(Offset(p.x + p.w + kerf, p.y));
-      candidates.add(Offset(p.x, p.y + p.h + kerf));
-    }
-    candidates.sort((a, b) {
-      final byY = a.dy.compareTo(b.dy);
-      return byY != 0 ? byY : a.dx.compareTo(b.dx);
-    });
-    for (final point in candidates) {
-      for (final rotated in [false, true]) {
-        if (rotated && (!part.rotate || part.a == part.b)) continue;
-        final w = rotated ? part.b : part.a, h = rotated ? part.a : part.b;
-        if (point.dx + w > maxW || point.dy + h > maxH) continue;
-        final rect = Rect.fromLTWH(point.dx, point.dy, w + kerf, h + kerf);
-        final collision = placed.any((old) => rect
-            .overlaps(Rect.fromLTWH(old.x, old.y, old.w + kerf, old.h + kerf)));
-        if (!collision) {
-          return PlacedPart(part.name, point.dx, point.dy, w, h,
-              rotated: rotated,
-              partId: part.id,
-              pieceIndex: part.pieceIndex ?? 0);
-        }
-      }
-    }
-    return null;
-  }
-}
-
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
   @override
@@ -676,7 +86,8 @@ class _AppShellState extends State<AppShell> {
     'Parts list',
     'Optimisation results',
     'Cutting diagrams',
-    'Reports'
+    'Reports',
+    'About',
   ];
   final List<IconData> _icons = [
     Icons.dashboard_outlined,
@@ -685,7 +96,8 @@ class _AppShellState extends State<AppShell> {
     Icons.view_list_outlined,
     Icons.auto_awesome_outlined,
     Icons.grid_view_outlined,
-    Icons.description_outlined
+    Icons.description_outlined,
+    Icons.info_outline,
   ];
   Project? _active;
   SolveResult? _result;
@@ -1537,28 +949,26 @@ class _AppShellState extends State<AppShell> {
     final useNavigationDrawer =
         !wide && defaultTargetPlatform == TargetPlatform.android;
     final content = _buildPage();
-    final heading = Expanded(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            _pages[_page],
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-                fontSize: 20, fontWeight: FontWeight.w800, color: ink),
-          ),
-          Text(
-            _active == null
-                ? 'Create a project to get started'
-                : '${_active!.name}  •  ${_active!.material} / ${_active!.variant}',
-            maxLines: 1,
-            style: const TextStyle(color: muted, fontSize: 12),
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
-      ),
+    final heading = Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          _pages[_page],
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+              fontSize: 20, fontWeight: FontWeight.w800, color: ink),
+        ),
+        Text(
+          _active == null
+              ? 'Create a project to get started'
+              : '${_active!.name}  •  ${_active!.material} / ${_active!.variant}',
+          maxLines: 1,
+          style: const TextStyle(color: muted, fontSize: 12),
+          overflow: TextOverflow.ellipsis,
+        ),
+      ],
     );
     final actions = <Widget>[
       if (_active != null)
@@ -1596,25 +1006,26 @@ class _AppShellState extends State<AppShell> {
               child: Column(children: [
             if (!wide) _mobileHeader(useNavigationDrawer: useNavigationDrawer),
             Container(
-              height: compact ? 108 : 68,
-              padding: EdgeInsets.symmetric(horizontal: compact ? 12 : 24),
+              height: compact ? 90 : 68,
+              padding: EdgeInsets.symmetric(
+                horizontal: compact ? 12 : 24,
+                vertical: compact ? 6 : 0,
+              ),
               color: Colors.white,
               child: compact
                   ? Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        SizedBox(height: 48, child: Row(children: [heading])),
-                        const SizedBox(height: 4),
-                        SizedBox(
-                          height: 44,
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            children: actions,
-                          ),
+                        Row(
+                          children: [
+                            Expanded(child: heading),
+                            ...actions,
+                          ],
                         ),
                       ],
                     )
                   : Row(children: [
-                      heading,
+                      Expanded(child: heading),
                       if (_active != null)
                         OutlinedButton.icon(
                           onPressed: _editProject,
@@ -1762,40 +1173,42 @@ class _AppShellState extends State<AppShell> {
                     fontSize: 10,
                     letterSpacing: 1.5,
                     fontWeight: FontWeight.bold))),
-        for (var i = 0; i < _pages.length; i++)
-          InkWell(
-              onTap: () => _selectPage(i),
-              child: Container(
-                  height: 46,
-                  margin:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  decoration: BoxDecoration(
-                      color: _page == i
-                          ? const Color(0xFF27394D)
-                          : Colors.transparent,
-                      borderRadius: BorderRadius.circular(9),
-                      border: _page == i
-                          ? const Border(
-                              left: BorderSide(color: orange, width: 3))
-                          : null),
-                  child: Row(children: [
-                    Icon(_icons[i],
-                        size: 19,
-                        color: _page == i ? orange : const Color(0xFFB4C0CF)),
-                    const SizedBox(width: 12),
-                    Expanded(
-                        child: Text(_pages[i],
-                            style: TextStyle(
-                                color: _page == i
-                                    ? Colors.white
-                                    : const Color(0xFFB4C0CF),
-                                fontWeight: _page == i
-                                    ? FontWeight.w700
-                                    : FontWeight.w500,
-                                fontSize: 13)))
-                  ]))),
-        const Spacer(),
+        Expanded(
+            child: ListView(padding: EdgeInsets.zero, children: [
+          for (var i = 0; i < _pages.length; i++)
+            InkWell(
+                onTap: () => _selectPage(i),
+                child: Container(
+                    height: 46,
+                    margin:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                        color: _page == i
+                            ? const Color(0xFF27394D)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(9),
+                        border: _page == i
+                            ? const Border(
+                                left: BorderSide(color: orange, width: 3))
+                            : null),
+                    child: Row(children: [
+                      Icon(_icons[i],
+                          size: 19,
+                          color: _page == i ? orange : const Color(0xFFB4C0CF)),
+                      const SizedBox(width: 12),
+                      Expanded(
+                          child: Text(_pages[i],
+                              style: TextStyle(
+                                  color: _page == i
+                                      ? Colors.white
+                                      : const Color(0xFFB4C0CF),
+                                  fontWeight: _page == i
+                                      ? FontWeight.w700
+                                      : FontWeight.w500,
+                                  fontSize: 13)))
+                    ]))),
+        ])),
         Container(
             margin: const EdgeInsets.all(14),
             padding: const EdgeInsets.all(13),
@@ -1831,6 +1244,10 @@ class _AppShellState extends State<AppShell> {
         return _resultsPage();
       case 5:
         return _diagramsPage();
+      case 6:
+        return _reportsPage();
+      case 7:
+        return _aboutPage();
       default:
         return _reportsPage();
     }
@@ -1855,31 +1272,43 @@ class _AppShellState extends State<AppShell> {
             : c.maxWidth > 600
                 ? 2
                 : 1;
+        final cards = [
+          MetricCard('Projects', '${_projects.length}',
+              Icons.folder_copy_outlined, orange),
+          MetricCard('Part demand', '$pieces pcs', Icons.view_list_outlined,
+              const Color(0xFF2F8D75)),
+          MetricCard(
+              'Material types',
+              '${_projects.map((p) => p.material).toSet().length}',
+              Icons.layers_outlined,
+              const Color(0xFF467DC4)),
+          MetricCard(
+              'Latest plan',
+              _result == null
+                  ? 'Not run'
+                  : '${_result!.stockCount} stock units',
+              Icons.auto_awesome_outlined,
+              const Color(0xFF8A65C5))
+        ];
+        if (n == 1) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final card in cards) ...[
+                card,
+                const SizedBox(height: 12),
+              ],
+            ],
+          );
+        }
         return GridView.count(
             crossAxisCount: n,
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
-            childAspectRatio: n == 1 ? 3.3 : 1.8,
+            childAspectRatio: 1.8,
             crossAxisSpacing: 12,
             mainAxisSpacing: 12,
-            children: [
-              MetricCard('Projects', '${_projects.length}',
-                  Icons.folder_copy_outlined, orange),
-              MetricCard('Part demand', '$pieces pcs', Icons.view_list_outlined,
-                  const Color(0xFF2F8D75)),
-              MetricCard(
-                  'Material types',
-                  '${_projects.map((p) => p.material).toSet().length}',
-                  Icons.layers_outlined,
-                  const Color(0xFF467DC4)),
-              MetricCard(
-                  'Latest plan',
-                  _result == null
-                      ? 'Not run'
-                      : '${_result!.stockCount} stock units',
-                  Icons.auto_awesome_outlined,
-                  const Color(0xFF8A65C5))
-            ]);
+            children: cards);
       }),
       const SizedBox(height: 22),
       const SectionTitle(
@@ -2438,7 +1867,7 @@ class _AppShellState extends State<AppShell> {
                 child: OutlinedButton.icon(
                   onPressed: () => setState(() => _page = 5),
                   icon: const Icon(Icons.grid_view),
-                  label: const Text('View cutting diagrams'),
+                  label: const Text('Diagram'),
                 ),
               ),
               const SizedBox(width: 10),
@@ -2446,7 +1875,7 @@ class _AppShellState extends State<AppShell> {
                 child: OutlinedButton.icon(
                   onPressed: _exportCsv,
                   icon: const Icon(Icons.table_chart_outlined),
-                  label: const Text('Export CSV'),
+                  label: const Text('CSV'),
                 ),
               ),
               const SizedBox(width: 10),
@@ -2454,7 +1883,7 @@ class _AppShellState extends State<AppShell> {
                 child: FilledButton.icon(
                   onPressed: _exportPdf,
                   icon: const Icon(Icons.picture_as_pdf_outlined),
-                  label: const Text('PDF report'),
+                  label: const Text('PDF'),
                 ),
               ),
             ],
@@ -2785,6 +2214,99 @@ class _AppShellState extends State<AppShell> {
         const SizedBox(height: 14),
         const PrototypeNotice()
       ]);
+
+  Widget _aboutPage() =>
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const SectionTitle('About Cut Optimiser',
+            'Application details, limitations and license.'),
+        const SizedBox(height: 14),
+        Card(
+            child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                          width: 52,
+                          height: 52,
+                          decoration: BoxDecoration(
+                              color: orange.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(14)),
+                          child: const Center(
+                              child: SawBladeIcon(
+                                  size: 32,
+                                  bladeColor: orange,
+                                  hubColor: ink))),
+                      const SizedBox(width: 14),
+                      const Expanded(
+                          child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                            Text('Cut Optimiser',
+                                style: TextStyle(
+                                    color: ink,
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w800)),
+                            SizedBox(height: 4),
+                            Text(
+                                'A cross-platform planner for sheet and linear cutting.',
+                                style: TextStyle(color: muted, height: 1.45)),
+                          ]))
+                    ]))),
+        const SizedBox(height: 14),
+        Card(
+            child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Application information',
+                          style: TextStyle(
+                              color: ink,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 8),
+                      _infoLine('Version', '0.1.0+1'),
+                      _infoLine(
+                          'Cutting modes', 'Linear stock and sheet nesting'),
+                      _infoLine('Storage',
+                          'Projects are saved locally on this device'),
+                      const SizedBox(height: 8),
+                      const Text(
+                          'Create and manage cutting projects, generate candidate layouts, track completed cuts, and export CSV or PDF production reports.',
+                          style: TextStyle(color: muted, height: 1.5)),
+                    ]))),
+        const SizedBox(height: 14),
+        const PrototypeNotice(),
+        const SizedBox(height: 14),
+        const Card(
+            child: Padding(
+                padding: EdgeInsets.all(20),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('License and copyright',
+                          style: TextStyle(
+                              color: ink,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800)),
+                      SizedBox(height: 8),
+                      Text('Copyright (C) 2026 Tendai Shoko'),
+                      SizedBox(height: 8),
+                      Text(
+                          'This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.'),
+                      SizedBox(height: 8),
+                      Text(
+                          'This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.'),
+                      SizedBox(height: 8),
+                      Text(
+                          'See the GNU General Public License for more details:'),
+                      SelectableText(
+                          'https://www.gnu.org/licenses/gpl-3.0.html',
+                          style: TextStyle(color: Color(0xFF467DC4))),
+                    ]))),
+      ]);
+
   Widget _infoLine(String title, String value) => Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -2987,174 +2509,4 @@ class SheetDiagramPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant SheetDiagramPainter oldDelegate) =>
       oldDelegate.s != s;
-}
-
-class SectionTitle extends StatelessWidget {
-  const SectionTitle(this.title, this.subtitle, {super.key});
-  final String title, subtitle;
-  @override
-  Widget build(BuildContext context) =>
-      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(title,
-            style: const TextStyle(
-                fontSize: 18, color: ink, fontWeight: FontWeight.w800)),
-        const SizedBox(height: 4),
-        Text(subtitle,
-            style: const TextStyle(fontSize: 12, color: muted, height: 1.4))
-      ]);
-}
-
-class SawBladeIcon extends StatelessWidget {
-  const SawBladeIcon({
-    super.key,
-    required this.size,
-    required this.bladeColor,
-    required this.hubColor,
-  });
-
-  final double size;
-  final Color bladeColor;
-  final Color hubColor;
-
-  @override
-  Widget build(BuildContext context) => CustomPaint(
-        size: Size.square(size),
-        painter: _SawBladePainter(bladeColor, hubColor),
-      );
-}
-
-class _SawBladePainter extends CustomPainter {
-  const _SawBladePainter(this.bladeColor, this.hubColor);
-
-  final Color bladeColor;
-  final Color hubColor;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = size.shortestSide / 2;
-    const teeth = 16;
-    final blade = Path();
-    for (var tooth = 0; tooth < teeth; tooth++) {
-      final angle = (tooth * 4 - 1) * math.pi / (teeth * 2);
-      final points = [
-        Offset(math.cos(angle) * radius * .78, math.sin(angle) * radius * .78),
-        Offset(math.cos(angle + math.pi / (teeth * 3)) * radius * .78,
-            math.sin(angle + math.pi / (teeth * 3)) * radius * .78),
-        Offset(math.cos(angle + math.pi / (teeth * 2)) * radius,
-            math.sin(angle + math.pi / (teeth * 2)) * radius),
-        Offset(math.cos(angle + math.pi / teeth) * radius * .78,
-            math.sin(angle + math.pi / teeth) * radius * .78),
-      ];
-      if (tooth == 0) {
-        blade.moveTo(center.dx + points.first.dx, center.dy + points.first.dy);
-      }
-      for (final point in points.skip(1)) {
-        blade.lineTo(center.dx + point.dx, center.dy + point.dy);
-      }
-    }
-    blade.close();
-    canvas.drawPath(blade, Paint()..color = bladeColor);
-    canvas.drawCircle(center, radius * .43, Paint()..color = hubColor);
-    canvas.drawCircle(center, radius * .16, Paint()..color = bladeColor);
-  }
-
-  @override
-  bool shouldRepaint(covariant _SawBladePainter oldDelegate) =>
-      oldDelegate.bladeColor != bladeColor || oldDelegate.hubColor != hubColor;
-}
-
-class MetricCard extends StatelessWidget {
-  const MetricCard(this.label, this.value, this.icon, this.color, {super.key});
-  final String label, value;
-  final IconData icon;
-  final Color color;
-  @override
-  Widget build(BuildContext context) => Card(
-      child: Padding(
-          padding: const EdgeInsets.all(15),
-          child: Row(children: [
-            Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                    color: color.withValues(alpha: .13),
-                    borderRadius: BorderRadius.circular(12)),
-                child: Icon(icon, color: color)),
-            const SizedBox(width: 12),
-            Expanded(
-                child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                  Text(label,
-                      style: const TextStyle(color: muted, fontSize: 11)),
-                  const SizedBox(height: 5),
-                  Text(value,
-                      style: const TextStyle(
-                          color: ink,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 17),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis)
-                ]))
-          ])));
-}
-
-class StatusPill extends StatelessWidget {
-  const StatusPill(this.text, {super.key});
-  final String text;
-  @override
-  Widget build(BuildContext context) => Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-      decoration: BoxDecoration(
-          color: const Color(0xFFFFE8D8),
-          borderRadius: BorderRadius.circular(20)),
-      child: Text(text,
-          style: const TextStyle(
-              color: Color(0xFF9A4B17),
-              fontSize: 9,
-              letterSpacing: .6,
-              fontWeight: FontWeight.w800)));
-}
-
-class PrototypeNotice extends StatelessWidget {
-  const PrototypeNotice({super.key});
-  @override
-  Widget build(BuildContext context) => Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-          color: const Color(0xFFEAF0F6),
-          borderRadius: BorderRadius.circular(10)),
-      child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Icon(Icons.science_outlined, color: Color(0xFF50647B)),
-        SizedBox(width: 10),
-        Expanded(
-            child: Text(
-                'Prototype scope: local projects, basic heuristic optimisation, scaled diagrams and PDF/CSV exports are implemented. Exact optimality proof, advanced inventory/offcut reuse, guillotine cut sequencing, cloud sync, machine constraints and production-grade validation are placeholders / not implemented.',
-                style: TextStyle(
-                    fontSize: 11, color: Color(0xFF50647B), height: 1.5)))
-      ]));
-}
-
-class EmptyState extends StatelessWidget {
-  const EmptyState(this.title, this.subtitle, {this.action, super.key});
-  final String title, subtitle;
-  final Widget? action;
-  @override
-  Widget build(BuildContext context) => Card(
-      child: Padding(
-          padding: const EdgeInsets.all(26),
-          child: Center(
-              child: Column(children: [
-            const Icon(Icons.layers_clear_outlined, size: 34, color: muted),
-            const SizedBox(height: 10),
-            Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
-            const SizedBox(height: 5),
-            Text(subtitle,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: muted, fontSize: 12)),
-            if (action != null) ...[const SizedBox(height: 14), action!]
-          ]))));
 }
