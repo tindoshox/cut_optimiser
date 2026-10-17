@@ -16,6 +16,7 @@ A responsive, offline-first Flutter prototype for cutting plans on **linear stoc
 - Identical bar and sheet layouts are grouped into a single diagram; individual part chips remain available for cut tracking.
 - Local persistence using `shared_preferences` (saved projects survive app restarts on the same device).
 - CSV cut-list export and printable/saveable PDF report.
+- About page with application details, prototype limitations, and copyright/license information.
 - Explicit status text stating that the heuristic candidate is **not proven globally optimal**.
 
 ## Important scope boundaries
@@ -91,7 +92,13 @@ Distribute the complete `build\windows\x64\runner\Release` directory (or zip its
 
 ## First-run walkthrough
 
-A sample linear job is preloaded. Use **New project** to create a sheet job, configure stock dimensions, add rectangle parts, then choose **Optimisation results** → **Run optimiser**. View the diagram and export the CSV or PDF report. Projects are stored locally on the current device; they are not automatically shared between desktop and mobile.
+A sample linear job is preloaded. Use **New project** to create a sheet job, configure stock dimensions, add rectangle parts, then choose **Optimisation results** → **Run optimiser**. View the diagram and export the CSV or PDF report. Open **About** from the navigation menu for app information, limitations, and license details. Projects are stored locally on the current device; they are not automatically shared between desktop and mobile.
+
+## License
+
+Copyright (C) 2026 Tendai Shoko.
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. It is distributed without any warranty; see the [GNU GPL version 3](https://www.gnu.org/licenses/gpl-3.0.html) for the full license terms.
 
 ## Data / algorithm notes
 
