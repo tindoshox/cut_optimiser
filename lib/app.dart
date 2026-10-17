@@ -30,46 +30,110 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 void main() => runApp(const CutOptimiserApp());
 
-class CutOptimiserApp extends StatelessWidget {
+class CutOptimiserApp extends StatefulWidget {
   const CutOptimiserApp({super.key});
+
+  @override
+  State<CutOptimiserApp> createState() => _CutOptimiserAppState();
+}
+
+class _CutOptimiserAppState extends State<CutOptimiserApp> {
+  static const _themeModeKey = 'cut_optimiser_theme_mode_v1';
+  ThemeMode _themeMode = ThemeMode.system;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadThemeMode();
+  }
+
+  Future<void> _loadThemeMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedMode = prefs.getString(_themeModeKey);
+    final themeMode = ThemeMode.values.where((mode) => mode.name == savedMode);
+    if (themeMode.isNotEmpty && mounted) {
+      setState(() => _themeMode = themeMode.first);
+    }
+  }
+
+  Future<void> _setThemeMode(ThemeMode themeMode) async {
+    setState(() => _themeMode = themeMode);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_themeModeKey, themeMode.name);
+  }
+
+  ThemeData _theme(Brightness brightness) {
+    final dark = brightness == Brightness.dark;
+    final colorScheme = ColorScheme.fromSeed(
+      seedColor: orange,
+      primary: orange,
+      brightness: brightness,
+      surface: dark ? const Color(0xFF182638) : Colors.white,
+    );
+    return ThemeData(
+      useMaterial3: true,
+      brightness: brightness,
+      scaffoldBackgroundColor: dark ? const Color(0xFF101B2A) : canvas,
+      colorScheme: colorScheme,
+      appBarTheme: AppBarTheme(
+        backgroundColor: colorScheme.surface,
+        foregroundColor: colorScheme.onSurface,
+        elevation: 0,
+      ),
+      cardTheme: CardThemeData(
+        color: colorScheme.surface,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: BorderSide(
+            color: dark ? const Color(0xFF34465A) : const Color(0xFFE3E8EE),
+          ),
+        ),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: dark ? const Color(0xFF101B2A) : const Color(0xFFF7F9FB),
+        isDense: true,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(9),
+          borderSide: BorderSide(
+            color: dark ? const Color(0xFF405268) : const Color(0xFFDCE3EA),
+          ),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(9),
+          borderSide: BorderSide(
+            color: dark ? const Color(0xFF405268) : const Color(0xFFDCE3EA),
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) => MaterialApp(
         title: 'Cut Optimiser',
         debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          useMaterial3: true,
-          scaffoldBackgroundColor: canvas,
-          colorScheme: ColorScheme.fromSeed(
-              seedColor: orange, primary: orange, surface: Colors.white),
-          appBarTheme: const AppBarTheme(
-              backgroundColor: Colors.white,
-              foregroundColor: ink,
-              elevation: 0),
-          cardTheme: CardThemeData(
-              color: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  side: const BorderSide(color: Color(0xFFE3E8EE)))),
-          inputDecorationTheme: InputDecorationTheme(
-            filled: true,
-            fillColor: const Color(0xFFF7F9FB),
-            isDense: true,
-            border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(9),
-                borderSide: const BorderSide(color: Color(0xFFDCE3EA))),
-            enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(9),
-                borderSide: const BorderSide(color: Color(0xFFDCE3EA))),
-          ),
+        theme: _theme(Brightness.light),
+        darkTheme: _theme(Brightness.dark),
+        themeMode: _themeMode,
+        home: AppShell(
+          themeMode: _themeMode,
+          onThemeModeChanged: _setThemeMode,
         ),
-        home: const AppShell(),
       );
 }
 
 class AppShell extends StatefulWidget {
-  const AppShell({super.key});
+  const AppShell({
+    required this.themeMode,
+    required this.onThemeModeChanged,
+    super.key,
+  });
+
+  final ThemeMode themeMode;
+  final ValueChanged<ThemeMode> onThemeModeChanged;
+
   @override
   State<AppShell> createState() => _AppShellState();
 }
@@ -373,9 +437,12 @@ class _AppShellState extends State<AppShell> {
                   onChanged: (v) => unit = v ?? 'mm',
                 ),
                 const SizedBox(height: 8),
-                const Text(
+                Text(
                   'Stock quantity = 0 lets the solver calculate the requirement. Dimensions use the selected unit consistently.',
-                  style: TextStyle(color: muted, fontSize: 12),
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
                 ),
               ],
             ),
@@ -597,9 +664,13 @@ class _AppShellState extends State<AppShell> {
                                 icon: const Icon(Icons.add),
                                 label: const Text('Add stock type'))),
                         const SizedBox(height: 4),
-                        const Text(
+                        Text(
                             'Each part is optimised only against its assigned stock type.',
-                            style: TextStyle(color: muted, fontSize: 12)),
+                            style: TextStyle(
+                                color: Theme.of(dialogContext)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                                fontSize: 12)),
                       ])),
                   actions: [
                     FilledButton(
@@ -957,15 +1028,21 @@ class _AppShellState extends State<AppShell> {
           _pages[_page],
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-              fontSize: 20, fontWeight: FontWeight.w800, color: ink),
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w800,
+            color: Theme.of(context).colorScheme.onSurface,
+          ),
         ),
         Text(
           _active == null
               ? 'Create a project to get started'
               : '${_active!.name}  •  ${_active!.material} / ${_active!.variant}',
           maxLines: 1,
-          style: const TextStyle(color: muted, fontSize: 12),
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            fontSize: 12,
+          ),
           overflow: TextOverflow.ellipsis,
         ),
       ],
@@ -1000,55 +1077,59 @@ class _AppShellState extends State<AppShell> {
     return Scaffold(
         key: _scaffoldKey,
         drawer: useNavigationDrawer ? _navigationDrawer() : null,
-        body: Row(children: [
-          if (wide) _sidebar(),
-          Expanded(
-              child: Column(children: [
-            if (!wide) _mobileHeader(useNavigationDrawer: useNavigationDrawer),
-            Container(
-              height: compact ? 90 : 68,
-              padding: EdgeInsets.symmetric(
-                horizontal: compact ? 12 : 24,
-                vertical: compact ? 6 : 0,
-              ),
-              color: Colors.white,
-              child: compact
-                  ? Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Row(
+        body: SafeArea(
+            top: true,
+            bottom: false,
+            child: Row(children: [
+              if (wide) _sidebar(),
+              Expanded(
+                  child: Column(children: [
+                if (!wide)
+                  _mobileHeader(useNavigationDrawer: useNavigationDrawer),
+                Container(
+                  height: compact ? 90 : 68,
+                  padding: EdgeInsets.symmetric(
+                    horizontal: compact ? 12 : 24,
+                    vertical: compact ? 6 : 0,
+                  ),
+                  color: Theme.of(context).colorScheme.surface,
+                  child: compact
+                      ? Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Expanded(child: heading),
-                            ...actions,
+                            Row(
+                              children: [
+                                Expanded(child: heading),
+                                ...actions,
+                              ],
+                            ),
                           ],
-                        ),
-                      ],
-                    )
-                  : Row(children: [
-                      Expanded(child: heading),
-                      if (_active != null)
-                        OutlinedButton.icon(
-                          onPressed: _editProject,
-                          icon: const Icon(Icons.tune, size: 17),
-                          label: const Text('Configure'),
-                        ),
-                      const SizedBox(width: 8),
-                      FilledButton.icon(
-                        onPressed: _newProject,
-                        icon: const Icon(Icons.add, size: 18),
-                        label: const Text('New project'),
-                      ),
-                    ]),
-            ),
-            Expanded(
-                child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 180),
-                    child: SingleChildScrollView(
-                        key: ValueKey(_page),
-                        padding: EdgeInsets.all(compact ? 12 : 22),
-                        child: content)))
-          ]))
-        ]));
+                        )
+                      : Row(children: [
+                          Expanded(child: heading),
+                          if (_active != null)
+                            OutlinedButton.icon(
+                              onPressed: _editProject,
+                              icon: const Icon(Icons.tune, size: 17),
+                              label: const Text('Configure'),
+                            ),
+                          const SizedBox(width: 8),
+                          FilledButton.icon(
+                            onPressed: _newProject,
+                            icon: const Icon(Icons.add, size: 18),
+                            label: const Text('New project'),
+                          ),
+                        ]),
+                ),
+                Expanded(
+                    child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 180),
+                        child: SingleChildScrollView(
+                            key: ValueKey(_page),
+                            padding: EdgeInsets.all(compact ? 12 : 22),
+                            child: content)))
+              ]))
+            ])));
   }
 
   Widget _mobileHeader({required bool useNavigationDrawer}) => Container(
@@ -1465,10 +1546,15 @@ class _AppShellState extends State<AppShell> {
                                     : '${_active!.stock.quantity}',
                           ),
                           const SizedBox(height: 12),
-                          const Text(
+                          Text(
                             'This prototype stores projects locally on this device. There is no cloud account or shared team workspace.',
                             style: TextStyle(
-                                color: muted, fontSize: 12, height: 1.45),
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                              fontSize: 12,
+                              height: 1.45,
+                            ),
                           ),
                         ],
                       ),
@@ -1586,9 +1672,13 @@ class _AppShellState extends State<AppShell> {
                         style: const TextStyle(fontWeight: FontWeight.w800))),
                 StatusPill(p.mode == CutMode.linear ? 'LENGTHS' : 'RECTANGLES'),
                 const SizedBox(width: 8),
-                Text('${p.totalPieces} pcs',
-                    style: const TextStyle(
-                        color: muted, fontWeight: FontWeight.w700))
+                Text(
+                  '${p.totalPieces} pcs',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w700,
+                  ),
+                )
               ])),
           const Divider(height: 1),
           if (p.parts.isEmpty)
@@ -1604,7 +1694,10 @@ class _AppShellState extends State<AppShell> {
                 Expanded(
                     child: Text(
                         '${p.parts.length} demand lines • ${p.totalPieces} total pieces',
-                        style: const TextStyle(color: muted, fontSize: 12))),
+                        style: TextStyle(
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
+                            fontSize: 12))),
                 OutlinedButton.icon(
                     onPressed: _addPart,
                     icon: const Icon(Icons.add, size: 16),
@@ -1625,11 +1718,15 @@ class _AppShellState extends State<AppShell> {
               width: 36,
               height: 36,
               decoration: BoxDecoration(
-                  color: canvas, borderRadius: BorderRadius.circular(8)),
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8)),
               child: Center(
                   child: Text('${i + 1}',
-                      style: const TextStyle(
-                          fontWeight: FontWeight.w800, color: muted)))),
+                      style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurfaceVariant)))),
           const SizedBox(width: 12),
           Expanded(
               flex: 3,
@@ -1642,10 +1739,17 @@ class _AppShellState extends State<AppShell> {
                         p.mode == CutMode.linear
                             ? 'Length ${part.a} ${p.unit}'
                             : '${part.a} × ${part.b} ${p.unit}${part.rotate ? ' • rotation allowed' : ''}',
-                        style: const TextStyle(fontSize: 12, color: muted)),
+                        style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant)),
                     Text(
                         'Stock: ${p.stocks.firstWhere((s) => s.id == part.stockId, orElse: () => p.stock).name}',
-                        style: const TextStyle(fontSize: 12, color: muted))
+                        style: TextStyle(
+                            fontSize: 12,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant))
                   ])),
           Text('× ${part.quantity}',
               style: const TextStyle(fontWeight: FontWeight.w800)),
@@ -1849,8 +1953,13 @@ class _AppShellState extends State<AppShell> {
                           Expanded(
                             child: Text(
                               note,
-                              style: const TextStyle(
-                                  fontSize: 12, height: 1.45, color: muted),
+                              style: TextStyle(
+                                fontSize: 12,
+                                height: 1.45,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                              ),
                             ),
                           ),
                         ],
@@ -1925,13 +2034,20 @@ class _AppShellState extends State<AppShell> {
               padding: const EdgeInsets.only(bottom: 12),
               child: Row(
                 children: [
-                  const Icon(Icons.touch_app_outlined, color: muted, size: 18),
+                  Icon(
+                    Icons.touch_app_outlined,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    size: 18,
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       'Tap a part in the diagram or list to mark it cut. '
                       '$cutCount of ${pieces.length} placed parts marked cut.',
-                      style: const TextStyle(color: muted, fontSize: 12),
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        fontSize: 12,
+                      ),
                     ),
                   ),
                 ],
@@ -1941,9 +2057,13 @@ class _AppShellState extends State<AppShell> {
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: Theme.of(context).colorScheme.surface,
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: const Color(0xFFE0E6EC)),
+              border: Border.all(
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? const Color(0xFF34465A)
+                    : const Color(0xFFE0E6EC),
+              ),
             ),
             child: Wrap(
               spacing: 16,
@@ -1970,8 +2090,13 @@ class _AppShellState extends State<AppShell> {
                   const SizedBox(width: 6),
                   const Text('Cut', style: TextStyle(fontSize: 12)),
                 ]),
-                Text('Dimensions in ${p.unit}',
-                    style: const TextStyle(color: muted, fontSize: 11)),
+                Text(
+                  'Dimensions in ${p.unit}',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 11,
+                  ),
+                ),
               ],
             ),
           ),
@@ -2017,17 +2142,28 @@ class _AppShellState extends State<AppShell> {
                 const SizedBox(width: 8),
                 Text(
                   '${stick.used.toStringAsFixed(1)} / ${(stick.stockLength - 2 * trim).toStringAsFixed(1)} ${project.unit}',
-                  style: const TextStyle(fontSize: 12, color: muted),
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant),
                 ),
               ],
             ),
             if (group.length > 1)
-              Text('Bars: $barNumbers',
-                  style: const TextStyle(fontSize: 11, color: muted)),
+              Text(
+                'Bars: $barNumbers',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
             const SizedBox(height: 12),
             LayoutBuilder(builder: (context, constraints) {
               final painter = LinearDiagramPainter(
-                  s: stick, unit: project.unit, trim: trim);
+                s: stick,
+                unit: project.unit,
+                trim: trim,
+                isDark: Theme.of(context).brightness == Brightness.dark,
+              );
               final size = Size(constraints.maxWidth, 74);
               return SizedBox(
                 height: size.height,
@@ -2049,8 +2185,8 @@ class _AppShellState extends State<AppShell> {
               padding: const EdgeInsets.only(top: 4),
               child: Text(
                 'Offcut: ${stick.offcutLength(trim).toStringAsFixed(1)} ${project.unit}',
-                style: const TextStyle(
-                  color: muted,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
                 ),
@@ -2107,17 +2243,31 @@ class _AppShellState extends State<AppShell> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                Text('${sheet.placements.length} pieces',
-                    style: const TextStyle(color: muted, fontSize: 12)),
+                Text(
+                  '${sheet.placements.length} pieces',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
+                ),
               ],
             ),
             if (group.length > 1)
-              Text('Sheets: $sheetNumbers',
-                  style: const TextStyle(fontSize: 11, color: muted)),
+              Text(
+                'Sheets: $sheetNumbers',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
             const SizedBox(height: 12),
             LayoutBuilder(builder: (context, constraints) {
-              final painter =
-                  SheetDiagramPainter(s: sheet, trim: trim, unit: project.unit);
+              final painter = SheetDiagramPainter(
+                s: sheet,
+                trim: trim,
+                unit: project.unit,
+                isDark: Theme.of(context).brightness == Brightness.dark,
+              );
               final size = Size(constraints.maxWidth, 280);
               return SizedBox(
                 height: size.height,
@@ -2139,8 +2289,8 @@ class _AppShellState extends State<AppShell> {
               padding: const EdgeInsets.only(top: 4),
               child: Text(
                 'Unused stock area: ${sheet.unusedArea(trim).toStringAsFixed(1)} ${project.unit}²',
-                style: const TextStyle(
-                  color: muted,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
                 ),
@@ -2192,9 +2342,13 @@ class _AppShellState extends State<AppShell> {
                           style: TextStyle(
                               fontWeight: FontWeight.w800, fontSize: 18)),
                       const SizedBox(height: 5),
-                      const Text(
+                      Text(
                           'PDF report includes project metadata, stock count, waste estimate, cut list and solver caveats. CSV provides row-level cut positions for spreadsheet or shop-floor workflows.',
-                          style: TextStyle(color: muted, height: 1.5)),
+                          style: TextStyle(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                              height: 1.5)),
                       const SizedBox(height: 18),
                       Wrap(spacing: 10, runSpacing: 10, children: [
                         FilledButton.icon(
@@ -2221,6 +2375,47 @@ class _AppShellState extends State<AppShell> {
             'Application details, limitations and license.'),
         const SizedBox(height: 14),
         Card(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Appearance',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 8),
+                const Text('Choose whether the app follows your device theme.'),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<ThemeMode>(
+                  key: ValueKey(widget.themeMode),
+                  initialValue: widget.themeMode,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Theme'),
+                  items: const [
+                    DropdownMenuItem(
+                      value: ThemeMode.system,
+                      child: Text('System default'),
+                    ),
+                    DropdownMenuItem(
+                      value: ThemeMode.light,
+                      child: Text('Light'),
+                    ),
+                    DropdownMenuItem(
+                      value: ThemeMode.dark,
+                      child: Text('Dark'),
+                    ),
+                  ],
+                  onChanged: (mode) {
+                    if (mode != null) widget.onThemeModeChanged(mode);
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        Card(
             child: Padding(
                 padding: const EdgeInsets.all(20),
                 child: Row(
@@ -2238,19 +2433,24 @@ class _AppShellState extends State<AppShell> {
                                   bladeColor: orange,
                                   hubColor: ink))),
                       const SizedBox(width: 14),
-                      const Expanded(
+                      Expanded(
                           child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                             Text('Cut Optimiser',
                                 style: TextStyle(
-                                    color: ink,
+                                    color:
+                                        Theme.of(context).colorScheme.onSurface,
                                     fontSize: 20,
                                     fontWeight: FontWeight.w800)),
-                            SizedBox(height: 4),
+                            const SizedBox(height: 4),
                             Text(
                                 'A cross-platform planner for sheet and linear cutting.',
-                                style: TextStyle(color: muted, height: 1.45)),
+                                style: TextStyle(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                                    height: 1.45)),
                           ]))
                     ]))),
         const SizedBox(height: 14),
@@ -2260,9 +2460,9 @@ class _AppShellState extends State<AppShell> {
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Application information',
+                      Text('Application information',
                           style: TextStyle(
-                              color: ink,
+                              color: Theme.of(context).colorScheme.onSurface,
                               fontSize: 16,
                               fontWeight: FontWeight.w800)),
                       const SizedBox(height: 8),
@@ -2274,34 +2474,34 @@ class _AppShellState extends State<AppShell> {
                       const SizedBox(height: 8),
                       const Text(
                           'Create and manage cutting projects, generate candidate layouts, track completed cuts, and export CSV or PDF production reports.',
-                          style: TextStyle(color: muted, height: 1.5)),
+                          style: TextStyle(height: 1.5)),
                     ]))),
         const SizedBox(height: 14),
         const PrototypeNotice(),
         const SizedBox(height: 14),
-        const Card(
+        Card(
             child: Padding(
-                padding: EdgeInsets.all(20),
+                padding: const EdgeInsets.all(20),
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text('License and copyright',
                           style: TextStyle(
-                              color: ink,
+                              color: Theme.of(context).colorScheme.onSurface,
                               fontSize: 16,
                               fontWeight: FontWeight.w800)),
-                      SizedBox(height: 8),
-                      Text('Copyright (C) 2026 Tendai Shoko'),
-                      SizedBox(height: 8),
-                      Text(
+                      const SizedBox(height: 8),
+                      const Text('Copyright (C) 2026 Tendai Shoko'),
+                      const SizedBox(height: 8),
+                      const Text(
                           'This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.'),
-                      SizedBox(height: 8),
-                      Text(
+                      const SizedBox(height: 8),
+                      const Text(
                           'This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.'),
-                      SizedBox(height: 8),
-                      Text(
+                      const SizedBox(height: 8),
+                      const Text(
                           'See the GNU General Public License for more details:'),
-                      SelectableText(
+                      const SelectableText(
                           'https://www.gnu.org/licenses/gpl-3.0.html',
                           style: TextStyle(color: Color(0xFF467DC4))),
                     ]))),
@@ -2312,7 +2512,9 @@ class _AppShellState extends State<AppShell> {
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Expanded(
             child: Text(title,
-                style: const TextStyle(color: muted, fontSize: 12))),
+                style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 12))),
         const SizedBox(width: 14),
         Flexible(
             child: Text(value,
@@ -2324,10 +2526,14 @@ class _AppShellState extends State<AppShell> {
 
 class LinearDiagramPainter extends CustomPainter {
   LinearDiagramPainter(
-      {required this.s, required this.unit, required this.trim});
+      {required this.s,
+      required this.unit,
+      required this.trim,
+      required this.isDark});
   final LinearStick s;
   final String unit;
   final double trim;
+  final bool isDark;
 
   PlacedPart? partAt(Size size, Offset position) {
     const left = 8.0;
@@ -2345,7 +2551,8 @@ class LinearDiagramPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final left = 8.0, top = 22.0, width = size.width - 16, height = 28.0;
     final scale = width / s.stockLength;
-    final base = Paint()..color = const Color(0xFFE6EBF0);
+    final base = Paint()
+      ..color = isDark ? const Color(0xFF34465A) : const Color(0xFFE6EBF0);
     canvas.drawRRect(
         RRect.fromRectAndRadius(
             Rect.fromLTWH(left, top, width, height), const Radius.circular(5)),
@@ -2388,16 +2595,18 @@ class LinearDiagramPainter extends CustomPainter {
         tp.paint(canvas, Offset(rect.left + 3, top + 8));
       }
     }
+    final labelColor =
+        isDark ? const Color(0xFFB4C0CF) : const Color(0xFF738195);
     final tp = TextPainter(
-        text: const TextSpan(
-            text: '0', style: TextStyle(fontSize: 10, color: muted)),
+        text: TextSpan(
+            text: '0', style: TextStyle(fontSize: 10, color: labelColor)),
         textDirection: TextDirection.ltr)
       ..layout();
     tp.paint(canvas, Offset(left, top + 36));
     final end = TextPainter(
         text: TextSpan(
             text: '${s.stockLength.toStringAsFixed(0)} $unit',
-            style: const TextStyle(fontSize: 10, color: muted)),
+            style: TextStyle(fontSize: 10, color: labelColor)),
         textDirection: TextDirection.ltr)
       ..layout();
     end.paint(canvas, Offset(left + width - end.width, top + 36));
@@ -2405,15 +2614,19 @@ class LinearDiagramPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant LinearDiagramPainter oldDelegate) =>
-      oldDelegate.s != s;
+      oldDelegate.s != s || oldDelegate.isDark != isDark;
 }
 
 class SheetDiagramPainter extends CustomPainter {
   SheetDiagramPainter(
-      {required this.s, required this.trim, required this.unit});
+      {required this.s,
+      required this.trim,
+      required this.unit,
+      required this.isDark});
   final SheetLayout s;
   final double trim;
   final String unit;
+  final bool isDark;
 
   PlacedPart? partAt(Size size, Offset position) {
     const margin = 18.0;
@@ -2437,9 +2650,11 @@ class SheetDiagramPainter extends CustomPainter {
     final w = s.stockW * scale, h = s.stockH * scale;
     final ox = (size.width - w) / 2, oy = (size.height - h) / 2;
     canvas.drawRect(
-        Rect.fromLTWH(ox, oy, w, h), Paint()..color = const Color(0xFFF8FAFC));
+        Rect.fromLTWH(ox, oy, w, h),
+        Paint()
+          ..color = isDark ? const Color(0xFF223448) : const Color(0xFFF8FAFC));
     final borderPaint = Paint()
-      ..color = ink
+      ..color = isDark ? const Color(0xFF9DABBC) : ink
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5;
     canvas.drawRect(Rect.fromLTWH(ox, oy, w, h), borderPaint);
@@ -2448,7 +2663,7 @@ class SheetDiagramPainter extends CustomPainter {
       canvas.drawRect(
           Rect.fromLTWH(ox + inset, oy + inset, w - 2 * inset, h - 2 * inset),
           Paint()
-            ..color = const Color(0xFFCBD5E1)
+            ..color = isDark ? const Color(0xFF60758C) : const Color(0xFFCBD5E1)
             ..style = PaintingStyle.stroke
             ..strokeWidth = 1
             ..strokeCap = StrokeCap.round);
@@ -2500,7 +2715,11 @@ class SheetDiagramPainter extends CustomPainter {
         text: TextSpan(
             text:
                 '${s.stockW.toStringAsFixed(0)} × ${s.stockH.toStringAsFixed(0)} $unit',
-            style: const TextStyle(fontSize: 10, color: muted)),
+            style: TextStyle(
+                fontSize: 10,
+                color: isDark
+                    ? const Color(0xFFB4C0CF)
+                    : const Color(0xFF738195))),
         textDirection: TextDirection.ltr)
       ..layout();
     tp.paint(canvas, Offset(ox, math.max(0, oy - 14)));
@@ -2508,5 +2727,5 @@ class SheetDiagramPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant SheetDiagramPainter oldDelegate) =>
-      oldDelegate.s != s;
+      oldDelegate.s != s || oldDelegate.isDark != isDark;
 }

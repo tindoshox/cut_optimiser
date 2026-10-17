@@ -55,14 +55,20 @@ void main() {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(360, 800);
+    tester.view.padding = const FakeViewPadding(top: 24);
     addTearDown(tester.view.resetDevicePixelRatio);
     addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetPadding);
     SharedPreferences.setMockInitialValues({});
 
     await tester.pumpWidget(const CutOptimiserApp());
     await tester.pumpAndSettle();
 
     expect(find.byType(PopupMenuButton<int>), findsNothing);
+    expect(
+      tester.getTopLeft(find.byTooltip('Open navigation menu')).dy,
+      greaterThanOrEqualTo(24),
+    );
     await tester.tap(find.byTooltip('Open navigation menu'));
     await tester.pumpAndSettle();
     expect(find.byType(Drawer), findsOneWidget);
@@ -72,6 +78,46 @@ void main() {
     expect(find.byType(Drawer), findsNothing);
     final exception = tester.takeException();
     expect(exception, isNull, reason: '$exception');
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('appearance preference switches and persists dark mode',
+      (WidgetTester tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    SharedPreferences.setMockInitialValues({});
+
+    await tester.pumpWidget(const CutOptimiserApp());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(PopupMenuButton<int>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('About').last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(DropdownButtonFormField<ThemeMode>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Dark').last);
+    await tester.pumpAndSettle();
+
+    expect(
+      Theme.of(tester.element(find.text('Appearance'))).brightness,
+      Brightness.dark,
+    );
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('cut_optimiser_theme_mode_v1'), 'dark');
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(const CutOptimiserApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(PopupMenuButton<int>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('About').last);
+    await tester.pumpAndSettle();
+    expect(
+      Theme.of(tester.element(find.text('Appearance'))).brightness,
+      Brightness.dark,
+    );
     debugDefaultTargetPlatformOverride = null;
   });
 }

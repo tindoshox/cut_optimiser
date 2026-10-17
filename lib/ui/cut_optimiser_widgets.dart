@@ -25,8 +25,8 @@ class SectionTitle extends StatelessWidget {
               title,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: ink,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurface,
                 fontSize: 18,
                 fontWeight: FontWeight.w800,
               ),
@@ -36,8 +36,8 @@ class SectionTitle extends StatelessWidget {
               subtitle,
               maxLines: 3,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: muted,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
                 fontSize: 12,
                 height: 1.4,
               ),
@@ -145,15 +145,18 @@ class MetricCard extends StatelessWidget {
                       label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: muted, fontSize: 11),
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        fontSize: 11,
+                      ),
                     ),
                     const SizedBox(height: 2),
                     Text(
                       value,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: ink,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurface,
                         fontSize: 16,
                         fontWeight: FontWeight.w800,
                       ),
@@ -195,19 +198,26 @@ class PrototypeNotice extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: const Color(0xFFFFF4E6),
+          color: Theme.of(context).brightness == Brightness.dark
+              ? const Color(0xFF49331F)
+              : const Color(0xFFFFF4E6),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: const Color(0xFFF9D8A8)),
         ),
-        child: const Row(
+        child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(Icons.info_outline, color: orange),
-            SizedBox(width: 10),
+            const Icon(Icons.info_outline, color: orange),
+            const SizedBox(width: 10),
             Expanded(
               child: Text(
                 'Prototype planner: this optimiser is intentionally heuristic and best suited to workshop planning rather than certified engineering calculations.',
-                style: TextStyle(color: Color(0xFF7A5631), height: 1.45),
+                style: TextStyle(
+                  color: Theme.of(context).brightness == Brightness.dark
+                      ? const Color(0xFFFFD6A8)
+                      : const Color(0xFF7A5631),
+                  height: 1.45,
+                ),
               ),
             ),
           ],
@@ -234,10 +244,10 @@ class EmptyState extends StatelessWidget {
                 title,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 17,
                   fontWeight: FontWeight.w800,
-                  color: ink,
+                  color: Theme.of(context).colorScheme.onSurface,
                 ),
               ),
               const SizedBox(height: 6),
@@ -245,7 +255,9 @@ class EmptyState extends StatelessWidget {
                 subtitle,
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: muted),
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
               ),
               if (action != null) ...[
                 const SizedBox(height: 14),
