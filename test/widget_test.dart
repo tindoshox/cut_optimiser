@@ -50,6 +50,73 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  testWidgets('part editor updates the name and dimensions',
+      (WidgetTester tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    SharedPreferences.setMockInitialValues({});
+
+    await tester.pumpWidget(const CutOptimiserApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(PopupMenuButton<int>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Parts list').last);
+    await tester.pumpAndSettle();
+    await tester
+        .tap(find.byTooltip('Edit part name, dimensions and quantity').first);
+    await tester.pumpAndSettle();
+
+    final fields = find.byType(TextField);
+    await tester.enterText(fields.at(0), 'Edited upright');
+    await tester.enterText(fields.at(1), '2100');
+    await tester.tap(find.text('Save part'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Edited upright'), findsOneWidget);
+    expect(find.textContaining('Length 2100.0 mm'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('part editor can reassign a part to another assembly',
+      (WidgetTester tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    SharedPreferences.setMockInitialValues({});
+
+    await tester.pumpWidget(const CutOptimiserApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(PopupMenuButton<int>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Parts list').last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Add assembly').first);
+    await tester.pumpAndSettle();
+    final assemblyFields = find.byType(TextField);
+    await tester.enterText(assemblyFields.at(0), 'Table');
+    await tester.enterText(assemblyFields.at(1), '1');
+    await tester.tap(find.text('Add assembly').last);
+    await tester.pumpAndSettle();
+
+    final editPart =
+        find.byTooltip('Edit part name, dimensions and quantity').first;
+    await tester.ensureVisible(editPart);
+    await tester.tap(editPart);
+    await tester.pumpAndSettle();
+    final dropdowns = find.byType(DropdownButtonFormField<String>);
+    await tester.tap(dropdowns.at(1));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Table').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save part'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('4 parts per assembly • 4 total cuts'),
+        findsOneWidget);
+    expect(find.text('Upright'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   testWidgets('Android phone navigation uses a drawer',
       (WidgetTester tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;

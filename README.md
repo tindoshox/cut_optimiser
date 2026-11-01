@@ -6,8 +6,9 @@ A responsive, offline-first Flutter prototype for cutting plans on **linear stoc
 
 - Dashboard with project and demand summaries.
 - Circular-saw branding with matching Android and Windows launcher icons.
-- Create and select local projects; configure project mode, material, variant/profile, stock format, available stock quantity, unit, kerf, trim and stock cost.
-- Add/remove parts and edit demand quantities.
+- Create and select local projects with named assemblies and production quantities; per-assembly part quantities are multiplied by the number of assemblies to produce.
+- Maintain a global material and stock catalog, including dimensions, units, available quantities, kerf, trim, and cost, then reuse those stock types in projects.
+- Add/remove assemblies and parts; edit each part's name, dimensions, per-assembly quantity, stock type, and sheet rotation preference.
 - Linear cutting: compares best-fit and first-fit packing across descending, ascending and entered part orders, with kerf and trim accounting.
 - Sheet cutting: compares area, longest-side, width, height and perimeter part orders, then keeps the layout with the fewest sheets and best compactness; supports optional 90° rotation, kerf and edge trim.
 - Scaled linear and sheet diagrams.
@@ -21,7 +22,7 @@ A responsive, offline-first Flutter prototype for cutting plans on **linear stoc
 
 ## Important scope boundaries
 
-This is a prototype, not a certified production optimiser. The following are **not implemented**: exact solver / optimality proof, robust infeasibility proof, advanced kerf-aware sheet nesting, guillotine cut trees, grain direction, material compatibility rules, inventory transactions/offcut reuse, multi-stock optimisation, supplier pricing logic, machine-specific constraints, cloud synchronisation, team collaboration, automated tests for all geometric edge cases, and release packaging/signing. The sheet placement algorithm is a simple geometric heuristic; independently verify dimensions and every plan before cutting. Parts that fail basic fit checks are called out in the run diagnostics, but the solver does not constitute a formal infeasibility check.
+This is a prototype, not a certified production optimiser. The following are **not implemented**: exact solver / optimality proof, robust infeasibility proof, advanced kerf-aware sheet nesting, guillotine cut trees, grain direction, inventory reservations or automatic stock deduction between projects, offcut reuse, supplier pricing logic, machine-specific constraints, cloud synchronisation, team collaboration, automated tests for all geometric edge cases, and release packaging/signing. A project uses one cutting mode (linear or sheet). The sheet placement algorithm is a simple geometric heuristic; independently verify dimensions and every plan before cutting. Parts that fail basic fit checks are called out in the run diagnostics, but the solver does not constitute a formal infeasibility check.
 
 ## Run it
 
@@ -90,9 +91,19 @@ flutter build windows --release
 
 Distribute the complete `build\windows\x64\runner\Release` directory (or zip its contents); the executable depends on the accompanying Flutter runtime, `data` directory, and plugin libraries. The build is unsigned and does not include an installer. Before publishing, choose the product version in `pubspec.yaml` and arrange code signing or installer packaging if required by the distribution channel.
 
+## Automated GitHub releases
+
+The GitHub Actions release workflow runs `flutter analyze` and `flutter test`, then builds Windows x64, Linux x64, and Android arm64. Push a version tag matching the version in `pubspec.yaml` (for example, `v0.2.0`) to create a GitHub Release containing:
+
+- `cut_optimiser-windows-x64.zip`
+- `cut_optimiser-linux-x64.tar.gz`
+- `cut_optimiser-android-arm64-unsigned.apk`
+
+The Android APK is unsigned unless signing is explicitly configured in CI; the workflow does not use or expose signing credentials. A manual workflow dispatch builds and uploads the artifacts for inspection but does not publish a GitHub Release.
+
 ## First-run walkthrough
 
-A sample linear job is preloaded. Use **New project** to create a sheet job, configure stock dimensions, add rectangle parts, then choose **Optimisation results** → **Run optimiser**. View the diagram and export the CSV or PDF report. Open **About** from the navigation menu for app information, limitations, and license details. Projects are stored locally on the current device; they are not automatically shared between desktop and mobile.
+A sample linear job is preloaded. Use **Materials & stock** to create reusable material and stock entries. Create a project, add assemblies with their production quantity, then add each assembly's parts with per-assembly quantities and dimensions. Run the optimiser and export the CSV or PDF report. Global stock quantities are shared by every project, but plans check availability independently and do not reserve or deduct stock. Projects and the catalog are stored locally on the current device; they are not automatically shared between desktop and mobile.
 
 ## License
 
@@ -103,12 +114,12 @@ This program is free software: you can redistribute it and/or modify it under th
 ## Data / algorithm notes
 
 - Dimensions are stored as floating-point values in the selected project unit for prototype speed. A production release should normalise dimensions to integer base units (e.g. micrometres) and validate all conversions.
-- Stock quantity `0` means calculate the required quantity. A positive value is treated as available stock and the result warns when the candidate uses more stock than that.
-- Cost is captured in project settings but is not yet part of the solver objective.
+- Stock quantity `0` means unlimited availability. A positive shared value is checked against each project's plan, but is not reserved or deducted between plans.
+- Cost is captured in the global stock catalog but is not yet part of the solver objective.
 - The waste percentage is an approximate one-dimensional or usable-sheet-area utilisation estimate. It is not a full manufacturing yield model.
 
-## Multiple stock types per project
+## Global materials and stock
 
-A project can now contain multiple stock formats (for example, 50×50 mm and 25×25 mm square tube in one frame project). Add or edit them under **Materials & stock → Manage stock types**, then assign each part to a stock type when adding or editing its demand line. The optimiser groups demand by stock type and solves each group independently, using that stock type’s dimensions, available quantity, kerf, and edge trim. Combined results and exports identify the stock format for each bar or sheet.
+A project can use multiple global stock formats (for example, 50×50 mm and 25×25 mm square tube in one frame project), provided they match that project's cutting mode and unit. Add or edit definitions on the **Materials & stock** page, then assign each part to a stock type. The optimiser groups demand by stock type and solves each group independently, using that stock type's dimensions, shared available quantity, kerf, and edge trim. Combined results and exports identify each stock format.
 
-Existing projects saved with the previous single `stock` field are migrated to one stock type automatically, and their existing parts are assigned to it.
+Existing projects saved with the previous single `stock` field are migrated to a global stock entry automatically. Legacy flat part lists are migrated into a single assembly with a production quantity of one.

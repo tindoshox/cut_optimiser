@@ -44,5 +44,6 @@ void main() {
         print('EX:$exception');
       }
     }
+    debugDefaultTargetPlatformOverride = null;
   });
 }

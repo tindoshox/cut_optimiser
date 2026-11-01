@@ -17,6 +17,61 @@ void main() {
     expect(result.linear.expand((s) => s.cuts).length, 4);
   });
 
+  test('assembly production quantity multiplies component demand', () {
+    final stock = StockConfig(width: 1000, kerf: 0);
+    final project = Project(
+      name: 'Table set',
+      mode: CutMode.linear,
+      stock: stock,
+      assemblies: [
+        Assembly(
+          name: 'Chair',
+          quantity: 4,
+          parts: [Part(name: 'Leg', a: 100, quantity: 3)],
+        ),
+      ],
+    );
+
+    expect(project.totalPieces, 12);
+    final result = CuttingEngine.solve(project);
+    final cuts = result.linear.expand((bar) => bar.cuts).toList();
+    expect(cuts.length, 12);
+    expect(cuts.every((part) => part.assemblyName == 'Chair'), isTrue);
+  });
+
+  test('project persistence stores stock references separately', () {
+    final globalStock = StockConfig(
+      id: 'shared-steel',
+      name: '6 m bar',
+      material: 'Mild steel',
+      variant: '25×25×1.6',
+      width: 6000,
+      quantity: 8,
+    );
+    final project = Project(
+      name: 'Shared stock project',
+      stock: globalStock,
+      assemblies: [
+        Assembly(
+          name: 'Frame',
+          quantity: 2,
+          parts: [
+            Part(name: 'Rail', a: 1000, stockId: globalStock.id),
+          ],
+        ),
+      ],
+    );
+
+    final projectJson = project.toJson(includeStockDefinitions: false);
+    expect(projectJson.containsKey('stocks'), isFalse);
+    expect(projectJson['stockIds'], [globalStock.id]);
+
+    final restored = Project.fromJson(projectJson)..bindStocks([globalStock]);
+    expect(identical(restored.stock, globalStock), isTrue);
+    expect(restored.stock.quantity, 8);
+    expect(restored.totalPieces, 2);
+  });
+
   test('linear multi-order heuristic finds a tighter bar packing', () {
     final project = Project(
       name: 'Mixed bar packing',

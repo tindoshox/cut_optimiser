@@ -2,11 +2,13 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../domain/project_model.dart';
+import '../domain/cut_optimiser_models.dart';
 
 abstract class ProjectRepository {
   Future<List<Project>> loadProjects();
   Future<void> saveProjects(List<Project> projects);
+  Future<List<StockConfig>> loadStocks();
+  Future<void> saveStocks(List<StockConfig> stocks);
 }
 
 class SharedPreferencesProjectRepository implements ProjectRepository {
@@ -14,53 +16,64 @@ class SharedPreferencesProjectRepository implements ProjectRepository {
 
   final SharedPreferences _prefs;
   static const _storageKey = 'cut_optimiser_projects_v1';
+  static const _stocksStorageKey = 'cut_optimiser_stocks_v1';
 
   @override
   Future<List<Project>> loadProjects() async {
     final raw = _prefs.getString(_storageKey);
     if (raw == null || raw.isEmpty) return const [];
 
-    try {
-      final decoded = jsonDecode(raw) as List;
-      return decoded
-          .map((entry) => Project(
-                name: entry['name'] as String,
-                mode: CutMode.values.firstWhere(
-                  (mode) => mode.name == entry['mode'],
-                  orElse: () => CutMode.linear,
-                ),
-                material: entry['material']?.toString() ?? 'Mild steel',
-                variant: entry['variant']?.toString() ?? '',
-                unit: entry['unit']?.toString() ?? 'mm',
-                kerf: (entry['kerf'] as num? ?? 3).toDouble(),
-                trim: (entry['trim'] as num? ?? 0).toDouble(),
-                parts: const [],
-                stocks: const [],
-                updated: entry['updated']?.toString() ?? '',
-              ))
-          .toList();
-    } catch (_) {
-      return const [];
+    final projects = (jsonDecode(raw) as List)
+        .map((entry) =>
+            Project.fromJson(Map<String, dynamic>.from(entry as Map)))
+        .toList();
+    final stocks = await loadStocks();
+    for (final project in projects) {
+      for (final stock in project.stocks) {
+        if (!stocks.any((item) => item.id == stock.id)) stocks.add(stock);
+      }
+      project.bindStocks(stocks);
     }
+    if (stocks.isNotEmpty) await saveStocks(stocks);
+    return projects;
   }
 
   @override
   Future<void> saveProjects(List<Project> projects) async {
     final encoded = jsonEncode(projects
-        .map((project) => {
-              'name': project.name,
-              'mode': project.mode.name,
-              'material': project.material,
-              'variant': project.variant,
-              'unit': project.unit,
-              'kerf': project.kerf,
-              'trim': project.trim,
-              'updated': project.updated,
-              'parts': project.parts.map((part) => part.toJson()).toList(),
-              'stocks': project.stocks.map((stock) => stock.toJson()).toList(),
-            })
+        .map((project) => project.toJson(includeStockDefinitions: false))
         .toList());
 
     await _prefs.setString(_storageKey, encoded);
+    final stocks = await loadStocks();
+    for (final project in projects) {
+      for (final stock in project.stocks) {
+        final index = stocks.indexWhere((item) => item.id == stock.id);
+        if (index < 0) {
+          stocks.add(stock);
+        } else {
+          stocks[index] = stock;
+        }
+      }
+    }
+    await saveStocks(stocks);
+  }
+
+  @override
+  Future<List<StockConfig>> loadStocks() async {
+    final raw = _prefs.getString(_stocksStorageKey);
+    if (raw == null || raw.isEmpty) return [];
+    return (jsonDecode(raw) as List)
+        .map((entry) =>
+            StockConfig.fromJson(Map<String, dynamic>.from(entry as Map)))
+        .toList();
+  }
+
+  @override
+  Future<void> saveStocks(List<StockConfig> stocks) async {
+    await _prefs.setString(
+      _stocksStorageKey,
+      jsonEncode(stocks.map((stock) => stock.toJson()).toList()),
+    );
   }
 }

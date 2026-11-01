@@ -28,6 +28,7 @@ List<List<LinearStick>> groupLinearDiagrams(
       trimFor(diagram),
       for (final part in diagram.cuts)
         [
+          part.assemblyName,
           part.name,
           part.x,
           part.w,
@@ -42,6 +43,7 @@ List<List<LinearStick>> groupLinearDiagrams(
 class PlacedPart {
   PlacedPart(this.name, this.x, this.y, this.w, this.h,
       {this.rotated = false,
+      this.assemblyName = '',
       this.partId = '',
       this.pieceIndex = 0,
       this.isCut = false});
@@ -49,6 +51,7 @@ class PlacedPart {
   final String name;
   final double x, y, w, h;
   final bool rotated;
+  final String assemblyName;
   final String partId;
   final int pieceIndex;
   final bool isCut;
@@ -82,6 +85,7 @@ List<List<SheetLayout>> groupSheetDiagrams(
       trimFor(diagram),
       for (final part in diagram.placements)
         [
+          part.assemblyName,
           part.name,
           part.x,
           part.y,
@@ -126,8 +130,9 @@ class CuttingEngine {
     var stockArea = 0.0;
 
     for (final stock in project.stocks) {
-      final assigned =
-          project.parts.where((part) => part.stockId == stock.id).toList();
+      final assigned = project.demandParts
+          .where((part) => part.stockId == stock.id)
+          .toList();
       if (assigned.isEmpty) continue;
 
       final sub = Project(
@@ -191,6 +196,7 @@ class CuttingEngine {
           pieceIndex: index,
           name: part.name,
           a: part.a,
+          assemblyName: part.assemblyName,
         ));
       }
     }
@@ -272,6 +278,7 @@ class CuttingEngine {
           selected.used +
           (selected.cuts.isEmpty ? 0 : project.kerf);
       selected.cuts.add(PlacedPart(item.name, x, 0, item.a, 1,
+          assemblyName: item.assemblyName,
           partId: item.id,
           pieceIndex: item.pieceIndex ?? 0,
           isCut: project.cutPieces.contains('${item.id}:${item.pieceIndex}')));
@@ -297,7 +304,8 @@ class CuttingEngine {
             name: part.name,
             a: part.a,
             b: part.b,
-            rotate: part.rotate));
+            rotate: part.rotate,
+            assemblyName: part.assemblyName));
       }
     }
 
@@ -395,6 +403,7 @@ class CuttingEngine {
       selectedSheet.placements.add(PlacedPart(
           part.name, spot.x, spot.y, spot.w, spot.h,
           rotated: spot.rotated,
+          assemblyName: part.assemblyName,
           partId: part.id,
           pieceIndex: part.pieceIndex ?? 0,
           isCut: project.cutPieces.contains('${part.id}:${part.pieceIndex}')));

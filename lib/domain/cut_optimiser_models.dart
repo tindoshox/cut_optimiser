@@ -10,6 +10,7 @@ class Part {
       this.quantity = 1,
       this.rotate = true,
       this.stockId = '',
+      this.assemblyName = '',
       String? id,
       this.pieceIndex})
       : id = id ?? DateTime.now().microsecondsSinceEpoch.toString();
@@ -22,6 +23,7 @@ class Part {
   int quantity;
   bool rotate;
   String stockId;
+  String assemblyName;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -44,47 +46,100 @@ class Part {
       );
 }
 
+class Assembly {
+  Assembly({
+    required this.name,
+    this.quantity = 1,
+    List<Part>? parts,
+    String? id,
+  })  : id = id ?? DateTime.now().microsecondsSinceEpoch.toString(),
+        parts = parts ?? [];
+
+  final String id;
+  String name;
+  int quantity;
+  List<Part> parts;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'quantity': quantity,
+        'parts': parts.map((part) => part.toJson()).toList(),
+      };
+
+  factory Assembly.fromJson(Map<String, dynamic> json) => Assembly(
+        id: json['id']?.toString(),
+        name: json['name']?.toString() ?? 'Assembly',
+        quantity: json['quantity'] as int? ?? 1,
+        parts: ((json['parts'] as List?) ?? [])
+            .map((entry) => Part.fromJson(Map<String, dynamic>.from(entry)))
+            .toList(),
+      );
+}
+
 class StockConfig {
   StockConfig(
       {String? id,
       this.name = 'Mild steel 25×25×1.6',
+      this.material = 'Mild steel',
+      this.variant = '25×25×1.6 mm',
       this.width = 6000,
       this.height = 0,
       this.quantity = 0,
       this.price = 0,
       this.kerf = 3,
-      this.trim = 0})
-      : id = id ?? DateTime.now().microsecondsSinceEpoch.toString();
+      this.trim = 0,
+      CutMode? mode,
+      this.unit = 'mm'})
+      : id = id ?? DateTime.now().microsecondsSinceEpoch.toString(),
+        mode = mode ?? (height > 0 ? CutMode.sheet : CutMode.linear);
 
   final String id;
   String name;
+  String material;
+  String variant;
   double width;
   double height;
   int quantity;
   double price;
   double kerf;
   double trim;
+  CutMode mode;
+  String unit;
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
+        'material': material,
+        'variant': variant,
         'width': width,
         'height': height,
         'quantity': quantity,
         'price': price,
         'kerf': kerf,
         'trim': trim,
+        'mode': mode.name,
+        'unit': unit,
       };
 
   factory StockConfig.fromJson(Map<String, dynamic> json) => StockConfig(
         id: json['id']?.toString(),
         name: json['name'] ?? 'Stock',
+        material: json['material']?.toString() ?? 'Mild steel',
+        variant: json['variant']?.toString() ?? '',
         width: (json['width'] as num? ?? 6000).toDouble(),
         height: (json['height'] as num? ?? 0).toDouble(),
         quantity: json['quantity'] ?? 0,
         price: (json['price'] as num? ?? 0).toDouble(),
         kerf: (json['kerf'] as num? ?? 3).toDouble(),
         trim: (json['trim'] as num? ?? 0).toDouble(),
+        mode: CutMode.values.firstWhere(
+          (mode) => mode.name == json['mode'],
+          orElse: () => (json['height'] as num? ?? 0) > 0
+              ? CutMode.sheet
+              : CutMode.linear,
+        ),
+        unit: json['unit']?.toString() ?? 'mm',
       );
 }
 
@@ -100,10 +155,17 @@ class Project {
     List<Part>? parts,
     StockConfig? stock,
     List<StockConfig>? stocks,
+    List<Assembly>? assemblies,
     Set<String>? cutPieces,
     this.updated = '',
-  })  : parts = parts ?? [],
-        stocks = stocks ?? [stock ?? StockConfig()],
+  })  : stocks = stocks ?? [stock ?? StockConfig()],
+        assemblies = assemblies ??
+            [
+              Assembly(
+                name: 'Assembly 1',
+                parts: parts ?? [],
+              )
+            ],
         cutPieces = cutPieces ?? <String>{},
         id = DateTime.now().microsecondsSinceEpoch.toString() {
     _assignDefaultStock();
@@ -118,8 +180,8 @@ class Project {
     required this.unit,
     required this.kerf,
     required this.trim,
-    required this.parts,
     required this.stocks,
+    required this.assemblies,
     required this.cutPieces,
     required this.updated,
   }) {
@@ -134,12 +196,13 @@ class Project {
   String unit;
   double kerf;
   double trim;
-  List<Part> parts;
   List<StockConfig> stocks;
+  List<Assembly> assemblies;
   Set<String> cutPieces;
   String updated;
 
-  StockConfig get stock => stocks.first;
+  StockConfig get stock =>
+      stocks.isEmpty ? StockConfig(mode: mode, unit: unit) : stocks.first;
   set stock(StockConfig value) {
     if (stocks.isEmpty) {
       stocks = [value];
@@ -150,15 +213,22 @@ class Project {
   }
 
   void _assignDefaultStock() {
-    if (stocks.isEmpty) stocks.add(StockConfig());
-    for (final part in parts) {
+    if (stocks.isEmpty) return;
+    for (final part in assemblies.expand((assembly) => assembly.parts)) {
       if (!stocks.any((stock) => stock.id == part.stockId)) {
         part.stockId = stocks.first.id;
       }
     }
   }
 
-  Map<String, dynamic> toJson() => {
+  void bindStocks(List<StockConfig> catalog) {
+    final ids = stocks.map((stock) => stock.id).toSet();
+    final matched = catalog.where((stock) => ids.contains(stock.id)).toList();
+    if (matched.isNotEmpty) stocks = matched;
+    _assignDefaultStock();
+  }
+
+  Map<String, dynamic> toJson({bool includeStockDefinitions = true}) => {
         'id': id,
         'name': name,
         'mode': mode.name,
@@ -167,10 +237,13 @@ class Project {
         'unit': unit,
         'kerf': kerf,
         'trim': trim,
-        'parts': parts.map((p) => p.toJson()).toList(),
-        'stocks': stocks.map((s) => s.toJson()).toList(),
+        'assemblies': assemblies.map((assembly) => assembly.toJson()).toList(),
+        'stockIds': stocks.map((stock) => stock.id).toList(),
+        if (includeStockDefinitions)
+          'stocks': stocks.map((s) => s.toJson()).toList(),
         'cutPieces': cutPieces.toList(),
-        'stock': stock.toJson(),
+        if (includeStockDefinitions && stocks.isNotEmpty)
+          'stock': stock.toJson(),
         'updated': updated,
       };
 
@@ -180,10 +253,14 @@ class Project {
         .toList();
     final legacyStock = StockConfig.fromJson(
         Map<String, dynamic>.from(json['stock'] ?? {'width': 6000}));
-    final stocks = (stockList == null || stockList.isEmpty)
-        ? <StockConfig>[legacyStock]
-        : stockList;
-    if (stockList == null || stockList.isEmpty) {
+    final stockIds =
+        (json['stockIds'] as List?)?.map((entry) => entry.toString()).toList();
+    final stocks = stockList != null && stockList.isNotEmpty
+        ? stockList
+        : stockIds != null
+            ? stockIds.map((id) => StockConfig(id: id)).toList()
+            : <StockConfig>[legacyStock];
+    if (stockIds == null && (stockList == null || stockList.isEmpty)) {
       legacyStock.kerf = (json['kerf'] as num? ?? 3).toDouble();
       legacyStock.trim = (json['trim'] as num? ?? 0).toDouble();
     }
@@ -191,10 +268,14 @@ class Project {
     final parts = ((json['parts'] as List?) ?? [])
         .map((entry) => Part.fromJson(Map<String, dynamic>.from(entry)))
         .toList();
+    final assemblies = ((json['assemblies'] as List?) ?? [])
+        .map((entry) => Assembly.fromJson(Map<String, dynamic>.from(entry)))
+        .toList();
 
-    for (final part in parts) {
-      if (part.stockId.isEmpty ||
-          !stocks.any((stock) => stock.id == part.stockId)) {
+    for (final part in assemblies.expand((assembly) => assembly.parts)) {
+      if (stocks.isNotEmpty &&
+          (part.stockId.isEmpty ||
+              !stocks.any((stock) => stock.id == part.stockId))) {
         part.stockId = stocks.first.id;
       }
     }
@@ -209,8 +290,10 @@ class Project {
       unit: json['unit'] ?? 'mm',
       kerf: (json['kerf'] as num? ?? 3).toDouble(),
       trim: (json['trim'] as num? ?? 0).toDouble(),
-      parts: parts,
       stocks: stocks,
+      assemblies: assemblies.isNotEmpty
+          ? assemblies
+          : [Assembly(name: 'Assembly 1', parts: parts)],
       cutPieces: ((json['cutPieces'] as List?) ?? [])
           .map((entry) => entry.toString())
           .toSet(),
@@ -218,7 +301,32 @@ class Project {
     );
   }
 
-  int get totalPieces => parts.fold(0, (sum, part) => sum + part.quantity);
+  List<Part> get parts =>
+      assemblies.expand((assembly) => assembly.parts).toList();
+
+  int get totalPieces => assemblies.fold(
+        0,
+        (sum, assembly) =>
+            sum +
+            assembly.quantity *
+                assembly.parts
+                    .fold(0, (partSum, part) => partSum + part.quantity),
+      );
+
+  List<Part> get demandParts => [
+        for (final assembly in assemblies)
+          for (final part in assembly.parts)
+            Part(
+              id: part.id,
+              name: part.name,
+              a: part.a,
+              b: part.b,
+              quantity: part.quantity * assembly.quantity,
+              rotate: part.rotate,
+              stockId: part.stockId,
+              assemblyName: assembly.name,
+            ),
+      ];
 }
 
 double clamp(double value, double min, double max) =>

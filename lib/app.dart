@@ -24,6 +24,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:pdf/pdf.dart' as pdf;
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -139,10 +140,13 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell> {
+  static const _projectsStorageKey = 'cut_optimiser_projects_v1';
+  static const _stocksStorageKey = 'cut_optimiser_stocks_v1';
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   int _page = 0;
   bool _loading = true;
   final List<Project> _projects = [];
+  final List<StockConfig> _stockCatalog = [];
   final List<String> _pages = [
     'Dashboard',
     'Projects',
@@ -173,25 +177,62 @@ class _AppShellState extends State<AppShell> {
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('cut_optimiser_projects_v1');
+    final savedStocks = prefs.getString(_stocksStorageKey);
+    if (savedStocks != null) {
+      try {
+        _stockCatalog.addAll((jsonDecode(savedStocks) as List).map(
+            (entry) => StockConfig.fromJson(Map<String, dynamic>.from(entry))));
+      } catch (error) {
+        _toast('Saved stock catalog could not be read: $error');
+      }
+    }
+    final raw = prefs.getString(_projectsStorageKey);
     if (raw != null) {
       try {
         _projects.addAll((jsonDecode(raw) as List)
             .map((e) => Project.fromJson(Map<String, dynamic>.from(e))));
-      } catch (_) {}
+      } catch (error) {
+        _toast('Saved projects could not be read: $error');
+      }
+    }
+    for (final project in _projects) {
+      for (final stock in project.stocks) {
+        final index = _stockCatalog.indexWhere((item) => item.id == stock.id);
+        if (index < 0) {
+          _stockCatalog.add(stock);
+        }
+      }
+      project.bindStocks(_stockCatalog);
     }
     if (_projects.isEmpty) {
+      final linearStocks = _stockCatalog
+          .where((item) => item.mode == CutMode.linear && item.unit == 'mm')
+          .toList();
+      final stock = linearStocks.isEmpty ? null : linearStocks.first;
+      final defaultStock = stock ??
+          StockConfig(
+            name: '6 m bar',
+            width: 6000,
+            quantity: 0,
+            mode: CutMode.linear,
+          );
+      if (stock == null) _stockCatalog.add(defaultStock);
       final sample = Project(
           name: 'Workshop — frame set',
           mode: CutMode.linear,
-          material: 'Mild steel',
-          variant: '25×25×1.6 mm',
-          stock: StockConfig(name: '6 m bar', width: 6000, quantity: 0),
-          parts: [
-            Part(name: 'Upright', a: 1800, quantity: 4),
-            Part(name: 'Cross rail', a: 920, quantity: 6),
-            Part(name: 'Brace', a: 640, quantity: 4),
-            Part(name: 'Short tab', a: 280, quantity: 8)
+          material: defaultStock.material,
+          variant: defaultStock.variant,
+          stock: defaultStock,
+          assemblies: [
+            Assembly(
+              name: 'Frame set',
+              parts: [
+                Part(name: 'Upright', a: 1800, quantity: 4),
+                Part(name: 'Cross rail', a: 920, quantity: 6),
+                Part(name: 'Brace', a: 640, quantity: 4),
+                Part(name: 'Short tab', a: 280, quantity: 8)
+              ],
+            ),
           ]);
       sample.updated = _date();
       _projects.add(sample);
@@ -207,8 +248,59 @@ class _AppShellState extends State<AppShell> {
 
   Future<void> _save() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('cut_optimiser_projects_v1',
-        jsonEncode(_projects.map((p) => p.toJson()).toList()));
+    await prefs.setString(
+      _projectsStorageKey,
+      jsonEncode(_projects
+          .map((project) => project.toJson(includeStockDefinitions: false))
+          .toList()),
+    );
+    await prefs.setString(
+      _stocksStorageKey,
+      jsonEncode(_stockCatalog.map((stock) => stock.toJson()).toList()),
+    );
+  }
+
+  List<StockConfig> _stocksForProject(Project project) => _stockCatalog
+      .where(
+          (stock) => stock.mode == project.mode && stock.unit == project.unit)
+      .toList();
+
+  String _projectMaterialSummary(Project project) => project.stocks
+      .map((stock) => [
+            stock.material,
+            if (stock.variant.isNotEmpty) stock.variant,
+          ].join(' '))
+      .toSet()
+      .join(', ');
+
+  String _stockLabel(StockConfig stock) => [
+        stock.material,
+        if (stock.variant.isNotEmpty) stock.variant,
+        '— ${stock.name}',
+      ].join(' ');
+
+  void _replaceCatalogStock(StockConfig stock) {
+    final index = _stockCatalog.indexWhere((item) => item.id == stock.id);
+    if (index >= 0) _stockCatalog[index] = stock;
+    for (final project in _projects) {
+      final projectStockIndex =
+          project.stocks.indexWhere((item) => item.id == stock.id);
+      if (projectStockIndex >= 0) project.stocks[projectStockIndex] = stock;
+    }
+  }
+
+  void _registerProjectStocks(Project project) {
+    for (var index = 0; index < project.stocks.length; index++) {
+      final stock = project.stocks[index];
+      final catalogIndex =
+          _stockCatalog.indexWhere((item) => item.id == stock.id);
+      if (catalogIndex < 0) {
+        _stockCatalog.add(stock);
+      } else {
+        project.stocks[index] = _stockCatalog[catalogIndex];
+      }
+    }
+    project.bindStocks(_stockCatalog);
   }
 
   String _date() {
@@ -219,6 +311,7 @@ class _AppShellState extends State<AppShell> {
   Future<void> _newProject() async {
     final name = TextEditingController(text: 'New cutting job');
     var mode = CutMode.linear;
+    var unit = 'mm';
 
     final result = await showDialog<Project>(
       context: context,
@@ -249,6 +342,18 @@ class _AppShellState extends State<AppShell> {
                   ],
                   onChanged: (v) => refresh(() => mode = v ?? CutMode.linear),
                 ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<String>(
+                  initialValue: unit,
+                  decoration:
+                      const InputDecoration(labelText: 'Dimension unit'),
+                  items: const [
+                    DropdownMenuItem(
+                        value: 'mm', child: Text('Millimetres (mm)')),
+                    DropdownMenuItem(value: 'in', child: Text('Inches (in)')),
+                  ],
+                  onChanged: (value) => refresh(() => unit = value ?? unit),
+                ),
               ],
             ),
           ),
@@ -264,17 +369,32 @@ class _AppShellState extends State<AppShell> {
                     Project(
                       name: name.text.trim(),
                       mode: mode,
+                      unit: unit,
                       material:
                           mode == CutMode.linear ? 'Mild steel' : 'Plywood',
                       variant: mode == CutMode.linear
                           ? '25×25×1.6 mm'
                           : '18 mm birch',
                       stock: mode == CutMode.linear
-                          ? StockConfig(name: '6 m bar', width: 6000)
+                          ? StockConfig(
+                              name: unit == 'mm' ? '6 m bar' : '20 ft bar',
+                              material: mode == CutMode.linear
+                                  ? 'Mild steel'
+                                  : 'Plywood',
+                              variant: mode == CutMode.linear
+                                  ? '25×25×1.6 mm'
+                                  : '18 mm birch',
+                              width: unit == 'mm' ? 6000 : 240,
+                              mode: mode,
+                              unit: unit)
                           : StockConfig(
                               name: '2440 × 1220 sheet',
-                              width: 2440,
-                              height: 1220),
+                              width: unit == 'mm' ? 2440 : 96,
+                              height: unit == 'mm' ? 1220 : 48,
+                              material: 'Plywood',
+                              variant: '18 mm birch',
+                              mode: mode,
+                              unit: unit),
                     ),
                   );
                 }
@@ -287,6 +407,13 @@ class _AppShellState extends State<AppShell> {
     );
 
     if (result != null) {
+      final compatibleStocks = _stocksForProject(result);
+      if (compatibleStocks.isNotEmpty) {
+        result.stocks = [compatibleStocks.first];
+        result.material = compatibleStocks.first.material;
+        result.variant = compatibleStocks.first.variant;
+      }
+      _registerProjectStocks(result);
       setState(() {
         _projects.insert(0, result);
         _active = result;
@@ -302,150 +429,15 @@ class _AppShellState extends State<AppShell> {
     if (p == null) return;
 
     final name = TextEditingController(text: p.name);
-    final material = TextEditingController(text: p.material);
-    final variant = TextEditingController(text: p.variant);
-    final stockName = TextEditingController(text: p.stock.name);
-    final w = TextEditingController(text: p.stock.width.toStringAsFixed(0));
-    final h = TextEditingController(text: p.stock.height.toStringAsFixed(0));
-    final qty = TextEditingController(text: p.stock.quantity.toString());
-    final kerf = TextEditingController(text: p.kerf.toString());
-    final trim = TextEditingController(text: p.trim.toString());
-    final price = TextEditingController(text: p.stock.price.toString());
-    var unit = p.unit;
-
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Project, material & stock'),
+        title: const Text('Edit project'),
         content: SizedBox(
-          width: 560,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: name,
-                  decoration: const InputDecoration(labelText: 'Project name'),
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: material,
-                        decoration:
-                            const InputDecoration(labelText: 'Material type'),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: TextField(
-                        controller: variant,
-                        decoration: const InputDecoration(
-                            labelText: 'Variant / profile'),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: stockName,
-                  decoration:
-                      const InputDecoration(labelText: 'Stock format name'),
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: w,
-                        keyboardType: TextInputType.number,
-                        decoration: InputDecoration(
-                          labelText: p.mode == CutMode.linear
-                              ? 'Stock length ($unit)'
-                              : 'Sheet width ($unit)',
-                        ),
-                      ),
-                    ),
-                    if (p.mode == CutMode.sheet) ...[
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: TextField(
-                          controller: h,
-                          keyboardType: TextInputType.number,
-                          decoration: InputDecoration(
-                              labelText: 'Sheet height ($unit)'),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: qty,
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
-                            labelText: 'Available stock qty (0 = auto)'),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: TextField(
-                        controller: price,
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
-                            labelText: 'Cost per stock unit'),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: kerf,
-                        keyboardType: TextInputType.number,
-                        decoration:
-                            InputDecoration(labelText: 'Saw kerf ($unit)'),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: TextField(
-                        controller: trim,
-                        keyboardType: TextInputType.number,
-                        decoration:
-                            InputDecoration(labelText: 'Edge trim ($unit)'),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                DropdownButtonFormField<String>(
-                  initialValue: unit,
-                  decoration:
-                      const InputDecoration(labelText: 'Dimension unit'),
-                  items: const [
-                    DropdownMenuItem(
-                        value: 'mm', child: Text('Millimetres (mm)')),
-                    DropdownMenuItem(value: 'in', child: Text('Inches (in)')),
-                  ],
-                  onChanged: (v) => unit = v ?? 'mm',
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Stock quantity = 0 lets the solver calculate the requirement. Dimensions use the selected unit consistently.',
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
+          width: 360,
+          child: TextField(
+            controller: name,
+            decoration: const InputDecoration(labelText: 'Project name'),
           ),
         ),
         actions: [
@@ -461,19 +453,6 @@ class _AppShellState extends State<AppShell> {
 
     if (ok == true) {
       p.name = name.text.trim().isEmpty ? p.name : name.text.trim();
-      p.material = material.text.trim();
-      p.variant = variant.text.trim();
-      p.stock.name = stockName.text.trim();
-      p.stock.width = _num(w.text, p.stock.width);
-      p.stock.height =
-          p.mode == CutMode.sheet ? _num(h.text, p.stock.height) : 0;
-      p.stock.quantity = int.tryParse(qty.text) ?? 0;
-      p.stock.price = _num(price.text, 0);
-      p.kerf = _num(kerf.text, 0);
-      p.trim = _num(trim.text, 0);
-      p.stock.kerf = p.kerf;
-      p.stock.trim = p.trim;
-      p.unit = unit;
       p.updated = _date();
       setState(() => _result = null);
       await _save();
@@ -484,208 +463,424 @@ class _AppShellState extends State<AppShell> {
       double.tryParse(s.trim().replaceAll(',', '.')) ?? fallback;
 
   Future<StockConfig?> _stockEditor(StockConfig? existing) async {
-    final original = existing;
-    final name =
-        TextEditingController(text: original?.name ?? 'New stock type');
+    final name = TextEditingController(text: existing?.name ?? 'New stock');
+    final material =
+        TextEditingController(text: existing?.material ?? 'Mild steel');
+    final variant = TextEditingController(text: existing?.variant ?? '');
     final width =
-        TextEditingController(text: (original?.width ?? 6000).toString());
+        TextEditingController(text: (existing?.width ?? 6000).toString());
     final height = TextEditingController(
-        text: (original?.height ?? (_active?.mode == CutMode.sheet ? 1220 : 0))
+        text: (existing?.height ?? (_active?.mode == CutMode.sheet ? 1220 : 0))
             .toString());
     final quantity =
-        TextEditingController(text: (original?.quantity ?? 0).toString());
+        TextEditingController(text: (existing?.quantity ?? 0).toString());
     final price =
-        TextEditingController(text: (original?.price ?? 0).toString());
-    final kerf = TextEditingController(
-        text: (original?.kerf ?? _active?.kerf ?? 3).toString());
-    final trim = TextEditingController(
-        text: (original?.trim ?? _active?.trim ?? 0).toString());
-    final p = _active!;
+        TextEditingController(text: (existing?.price ?? 0).toString());
+    final kerf = TextEditingController(text: (existing?.kerf ?? 3).toString());
+    final trim = TextEditingController(text: (existing?.trim ?? 0).toString());
+    var mode = existing?.mode ?? _active?.mode ?? CutMode.linear;
+    var unit = existing?.unit ?? _active?.unit ?? 'mm';
+
     return showDialog<StockConfig>(
-        context: context,
-        builder: (context) => AlertDialog(
-              title:
-                  Text(original == null ? 'Add stock type' : 'Edit stock type'),
-              content: SizedBox(
-                  width: 420,
-                  child: SingleChildScrollView(
-                      child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    TextField(
-                        controller: name,
-                        decoration: const InputDecoration(
-                            labelText: 'Stock type / profile name')),
-                    const SizedBox(height: 10),
-                    TextField(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, refresh) => AlertDialog(
+          title:
+              Text(existing == null ? 'Add shared stock' : 'Edit shared stock'),
+          content: SizedBox(
+            width: 440,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: material,
+                    decoration: const InputDecoration(labelText: 'Material'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: variant,
+                    decoration:
+                        const InputDecoration(labelText: 'Variant / profile'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: name,
+                    decoration:
+                        const InputDecoration(labelText: 'Stock format'),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    Expanded(
+                      child: DropdownButtonFormField<CutMode>(
+                        initialValue: mode,
+                        decoration:
+                            const InputDecoration(labelText: 'Cutting mode'),
+                        items: const [
+                          DropdownMenuItem(
+                              value: CutMode.linear, child: Text('Linear')),
+                          DropdownMenuItem(
+                              value: CutMode.sheet, child: Text('Sheet')),
+                        ],
+                        onChanged: existing == null
+                            ? (value) => refresh(() => mode = value ?? mode)
+                            : null,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        initialValue: unit,
+                        decoration: const InputDecoration(labelText: 'Unit'),
+                        items: const [
+                          DropdownMenuItem(value: 'mm', child: Text('mm')),
+                          DropdownMenuItem(value: 'in', child: Text('in')),
+                        ],
+                        onChanged: existing == null
+                            ? (value) => refresh(() => unit = value ?? unit)
+                            : null,
+                      ),
+                    ),
+                  ]),
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    Expanded(
+                      child: TextField(
                         controller: width,
                         keyboardType: TextInputType.number,
                         decoration: InputDecoration(
-                            labelText: p.mode == CutMode.linear
-                                ? 'Stock length (${p.unit})'
-                                : 'Sheet width (${p.unit})')),
-                    if (p.mode == CutMode.sheet) ...[
-                      const SizedBox(height: 10),
-                      TextField(
+                            labelText: mode == CutMode.linear
+                                ? 'Stock length ($unit)'
+                                : 'Sheet width ($unit)'),
+                      ),
+                    ),
+                    if (mode == CutMode.sheet) ...[
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
                           controller: height,
                           keyboardType: TextInputType.number,
                           decoration: InputDecoration(
-                              labelText: 'Sheet height (${p.unit})'))
+                              labelText: 'Sheet height ($unit)'),
+                        ),
+                      ),
                     ],
-                    const SizedBox(height: 10),
-                    Row(children: [
-                      Expanded(
-                          child: TextField(
-                              controller: quantity,
-                              keyboardType: TextInputType.number,
-                              decoration: const InputDecoration(
-                                  labelText: 'Available qty (0 = auto)'))),
-                      const SizedBox(width: 10),
-                      Expanded(
-                          child: TextField(
-                              controller: price,
-                              keyboardType: TextInputType.number,
-                              decoration: const InputDecoration(
-                                  labelText: 'Cost per unit')))
-                    ]),
-                    const SizedBox(height: 10),
-                    Row(children: [
-                      Expanded(
-                          child: TextField(
-                              controller: kerf,
-                              keyboardType: TextInputType.number,
-                              decoration: InputDecoration(
-                                  labelText: 'Cut kerf (${p.unit})'))),
-                      const SizedBox(width: 10),
-                      Expanded(
-                          child: TextField(
-                              controller: trim,
-                              keyboardType: TextInputType.number,
-                              decoration: InputDecoration(
-                                  labelText: 'Edge trim (${p.unit})')))
-                    ]),
-                  ]))),
-              actions: [
-                TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Cancel')),
-                FilledButton(
-                    onPressed: () {
-                      final w = _num(width.text, 0);
-                      final h =
-                          p.mode == CutMode.sheet ? _num(height.text, 0) : 0.0;
-                      final q = int.tryParse(quantity.text) ?? 0;
-                      if (name.text.trim().isEmpty ||
-                          w <= 0 ||
-                          (p.mode == CutMode.sheet && h <= 0) ||
-                          q < 0) {
-                        return;
-                      }
-                      Navigator.pop(
-                          context,
-                          StockConfig(
-                              id: original?.id,
-                              name: name.text.trim(),
-                              width: w,
-                              height: h,
-                              quantity: q,
-                              price: _num(price.text, 0),
-                              kerf: _num(kerf.text, 0),
-                              trim: _num(trim.text, 0)));
-                    },
-                    child: const Text('Save stock'))
-              ],
-            ));
+                  ]),
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    Expanded(
+                      child: TextField(
+                        controller: quantity,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                            labelText: 'Available qty (0 = unlimited)'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: price,
+                        keyboardType: TextInputType.number,
+                        decoration:
+                            const InputDecoration(labelText: 'Cost per unit'),
+                      ),
+                    ),
+                  ]),
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    Expanded(
+                      child: TextField(
+                        controller: kerf,
+                        keyboardType: TextInputType.number,
+                        decoration: InputDecoration(labelText: 'Kerf ($unit)'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: trim,
+                        keyboardType: TextInputType.number,
+                        decoration:
+                            InputDecoration(labelText: 'Edge trim ($unit)'),
+                      ),
+                    ),
+                  ]),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () {
+                final stockWidth = _num(width.text, 0);
+                final stockHeight =
+                    mode == CutMode.sheet ? _num(height.text, 0) : 0.0;
+                final available = int.tryParse(quantity.text) ?? -1;
+                if (name.text.trim().isEmpty ||
+                    material.text.trim().isEmpty ||
+                    stockWidth <= 0 ||
+                    (mode == CutMode.sheet && stockHeight <= 0) ||
+                    available < 0) {
+                  _toast(
+                      'Enter a material, stock name, valid dimensions and quantity.');
+                  return;
+                }
+                Navigator.pop(
+                  dialogContext,
+                  StockConfig(
+                    id: existing?.id,
+                    name: name.text.trim(),
+                    material: material.text.trim(),
+                    variant: variant.text.trim(),
+                    width: stockWidth,
+                    height: stockHeight,
+                    quantity: available,
+                    price: _num(price.text, 0),
+                    kerf: _num(kerf.text, 0),
+                    trim: _num(trim.text, 0),
+                    mode: mode,
+                    unit: unit,
+                  ),
+                );
+              },
+              child: const Text('Save stock'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _manageStocks() async {
-    final p = _active;
-    if (p == null) return;
     await showDialog<void>(
-        context: context,
-        builder: (dialogContext) => StatefulBuilder(
-            builder: (context, refresh) => AlertDialog(
-                  title: const Text('Stock types'),
-                  content: SizedBox(
-                      width: 520,
-                      child: Column(mainAxisSize: MainAxisSize.min, children: [
-                        Flexible(
-                            child: ListView(shrinkWrap: true, children: [
-                          for (final stock in p.stocks)
-                            ListTile(
-                              leading: const Icon(Icons.inventory_2_outlined),
-                              title: Text(stock.name),
-                              subtitle: Text(p.mode == CutMode.linear
-                                  ? '${stock.width} ${p.unit} • Qty ${stock.quantity == 0 ? 'auto' : stock.quantity} • Kerf/trim ${stock.kerf}/${stock.trim}'
-                                  : '${stock.width} × ${stock.height} ${p.unit} • Qty ${stock.quantity == 0 ? 'auto' : stock.quantity} • Kerf/trim ${stock.kerf}/${stock.trim}'),
-                              trailing: Wrap(children: [
-                                IconButton(
-                                    tooltip: 'Edit stock type',
-                                    icon: const Icon(Icons.edit_outlined),
-                                    onPressed: () async {
-                                      final updated = await _stockEditor(stock);
-                                      if (updated != null) {
-                                        final i = p.stocks.indexWhere(
-                                            (s) => s.id == stock.id);
-                                        if (i >= 0) p.stocks[i] = updated;
-                                        refresh(() {});
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, refresh) => AlertDialog(
+          title: const Text('Global materials & stock'),
+          content: SizedBox(
+            width: 560,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final stock in _stockCatalog)
+                      ListTile(
+                        leading: const Icon(Icons.inventory_2_outlined),
+                        title:
+                            Text('${stock.material} ${stock.variant}'.trim()),
+                        subtitle: Text(
+                          '${stock.name} • ${stock.mode == CutMode.linear ? '${stock.width} ${stock.unit}' : '${stock.width} × ${stock.height} ${stock.unit}'} • Qty ${stock.quantity == 0 ? 'unlimited' : stock.quantity}',
+                        ),
+                        trailing: Wrap(children: [
+                          IconButton(
+                            tooltip: 'Edit stock type',
+                            icon: const Icon(Icons.edit_outlined),
+                            onPressed: () async {
+                              final updated = await _stockEditor(stock);
+                              if (updated != null) {
+                                _replaceCatalogStock(updated);
+                                refresh(() {});
+                              }
+                            },
+                          ),
+                          IconButton(
+                            tooltip: 'Remove stock type',
+                            icon: const Icon(Icons.delete_outline),
+                            onPressed: _projects.any((project) => project.parts
+                                    .any((part) => part.stockId == stock.id))
+                                ? null
+                                : () {
+                                    for (final project in _projects) {
+                                      project.stocks.removeWhere(
+                                          (item) => item.id == stock.id);
+                                      if (project.stocks.isEmpty) {
+                                        final replacements = _stockCatalog
+                                            .where((item) =>
+                                                item.id != stock.id &&
+                                                item.mode == project.mode &&
+                                                item.unit == project.unit)
+                                            .toList();
+                                        if (replacements.isNotEmpty) {
+                                          project.stocks
+                                              .add(replacements.first);
+                                        }
                                       }
-                                    }),
-                                IconButton(
-                                    tooltip: 'Remove stock type',
-                                    icon: const Icon(Icons.delete_outline),
-                                    onPressed: p.stocks.length <= 1
-                                        ? null
-                                        : () {
-                                            final replacement = p.stocks
-                                                .firstWhere(
-                                                    (s) => s.id != stock.id);
-                                            for (final part in p.parts.where(
-                                                (part) =>
-                                                    part.stockId == stock.id)) {
-                                              part.stockId = replacement.id;
-                                            }
-                                            p.stocks.removeWhere(
-                                                (s) => s.id == stock.id);
-                                            refresh(() {});
-                                          })
-                              ]),
-                            )
-                        ])),
-                        const SizedBox(height: 8),
-                        Align(
-                            alignment: Alignment.centerLeft,
-                            child: OutlinedButton.icon(
-                                onPressed: () async {
-                                  final stock = await _stockEditor(null);
-                                  if (stock != null) {
-                                    p.stocks.add(stock);
+                                    }
+                                    _stockCatalog.removeWhere(
+                                        (item) => item.id == stock.id);
                                     refresh(() {});
-                                  }
-                                },
-                                icon: const Icon(Icons.add),
-                                label: const Text('Add stock type'))),
-                        const SizedBox(height: 4),
-                        Text(
-                            'Each part is optimised only against its assigned stock type.',
-                            style: TextStyle(
-                                color: Theme.of(dialogContext)
-                                    .colorScheme
-                                    .onSurfaceVariant,
-                                fontSize: 12)),
-                      ])),
-                  actions: [
-                    FilledButton(
-                        onPressed: () => Navigator.pop(dialogContext),
-                        child: const Text('Done'))
+                                  },
+                          ),
+                        ]),
+                      ),
                   ],
-                )));
-    p.updated = _date();
-    setState(() => _result = null);
+                ),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    final stock = await _stockEditor(null);
+                    if (stock != null) {
+                      _stockCatalog.add(stock);
+                      refresh(() {});
+                    }
+                  },
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add material / stock'),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Stock quantities are shared across projects. Each project plan checks the shared quantity independently; plans do not reserve or deduct stock.',
+                style: TextStyle(
+                    color: Theme.of(dialogContext).colorScheme.onSurfaceVariant,
+                    fontSize: 12),
+              ),
+            ]),
+          ),
+          actions: [
+            FilledButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Done'))
+          ],
+        ),
+      ),
+    );
+    setState(() {
+      _result = _active == null ? null : CuttingEngine.solve(_active!);
+    });
     await _save();
   }
 
-  Future<void> _addPart() async {
+  Future<void> _addAssembly() async {
+    final name = TextEditingController(text: 'New assembly');
+    final quantity = TextEditingController(text: '1');
+    final assembly = await showDialog<Assembly>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Add assembly'),
+        content: SizedBox(
+          width: 360,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+              controller: name,
+              decoration: const InputDecoration(labelText: 'Assembly name'),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: quantity,
+              keyboardType: TextInputType.number,
+              decoration:
+                  const InputDecoration(labelText: 'Assemblies to produce'),
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              final count = int.tryParse(quantity.text) ?? 0;
+              if (name.text.trim().isEmpty || count <= 0) {
+                _toast('Enter an assembly name and a positive quantity.');
+                return;
+              }
+              Navigator.pop(
+                dialogContext,
+                Assembly(name: name.text.trim(), quantity: count),
+              );
+            },
+            child: const Text('Add assembly'),
+          ),
+        ],
+      ),
+    );
+    if (assembly == null || _active == null) return;
+    setState(() {
+      _active!.assemblies.add(assembly);
+      _active!.updated = _date();
+      _result = null;
+    });
+    await _save();
+  }
+
+  Future<void> _editAssembly(Assembly assembly) async {
+    final name = TextEditingController(text: assembly.name);
+    final quantity = TextEditingController(text: '${assembly.quantity}');
+    final updated = await showDialog<Assembly>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Edit assembly'),
+        content: SizedBox(
+          width: 360,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+              controller: name,
+              decoration: const InputDecoration(labelText: 'Assembly name'),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: quantity,
+              keyboardType: TextInputType.number,
+              decoration:
+                  const InputDecoration(labelText: 'Assemblies to produce'),
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              final count = int.tryParse(quantity.text) ?? 0;
+              if (name.text.trim().isEmpty || count <= 0) {
+                _toast('Enter an assembly name and a positive quantity.');
+                return;
+              }
+              Navigator.pop(
+                dialogContext,
+                Assembly(
+                    name: name.text.trim(), quantity: count, id: assembly.id),
+              );
+            },
+            child: const Text('Save assembly'),
+          ),
+        ],
+      ),
+    );
+    if (updated == null || _active == null) return;
+    setState(() {
+      if (updated.quantity != assembly.quantity) {
+        for (final part in assembly.parts) {
+          _active!.cutPieces
+              .removeWhere((key) => key.startsWith('${part.id}:'));
+        }
+      }
+      assembly.name = updated.name;
+      assembly.quantity = updated.quantity;
+      _active!.updated = _date();
+      _result = null;
+    });
+    await _save();
+  }
+
+  Future<void> _addPart(Assembly assembly) async {
     final p = _active;
     if (p == null) return;
+    final availableStocks = _stocksForProject(p);
+    if (availableStocks.isEmpty) {
+      _toast(
+          'Add a shared ${p.mode == CutMode.linear ? 'linear' : 'sheet'} stock type first.');
+      return;
+    }
 
     final name = TextEditingController(
         text: p.mode == CutMode.linear ? 'Cut length' : 'Panel');
@@ -695,13 +890,13 @@ class _AppShellState extends State<AppShell> {
         TextEditingController(text: p.mode == CutMode.linear ? '0' : '400');
     final q = TextEditingController(text: '1');
     var rotate = true;
-    var selectedStockId = p.stocks.first.id;
+    var selectedStockId = availableStocks.first.id;
 
     final part = await showDialog<Part>(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, refresh) => AlertDialog(
-          title: const Text('Add part demand'),
+          title: Text('Add part to ${assembly.name}'),
           content: SizedBox(
             width: 380,
             child: Column(
@@ -714,13 +909,17 @@ class _AppShellState extends State<AppShell> {
                 const SizedBox(height: 10),
                 DropdownButtonFormField<String>(
                   initialValue: selectedStockId,
+                  isExpanded: true,
                   decoration: const InputDecoration(labelText: 'Stock type'),
                   items: [
-                    for (final stock in p.stocks)
-                      DropdownMenuItem(value: stock.id, child: Text(stock.name))
+                    for (final stock in availableStocks)
+                      DropdownMenuItem(
+                          value: stock.id,
+                          child: Text(_stockLabel(stock),
+                              overflow: TextOverflow.ellipsis))
                   ],
-                  onChanged: (value) => refresh(
-                      () => selectedStockId = value ?? p.stocks.first.id),
+                  onChanged: (value) => refresh(() =>
+                      selectedStockId = value ?? availableStocks.first.id),
                 ),
                 const SizedBox(height: 10),
                 Row(
@@ -799,12 +998,169 @@ class _AppShellState extends State<AppShell> {
 
     if (part != null) {
       setState(() {
-        p.parts.add(part);
+        assembly.parts.add(part);
+        final stock =
+            _stockCatalog.firstWhere((item) => item.id == part.stockId);
+        if (!p.stocks.any((item) => item.id == stock.id)) {
+          p.stocks.add(stock);
+        }
+        p.material = stock.material;
+        p.variant = stock.variant;
         p.updated = _date();
         _result = null;
       });
       await _save();
     }
+  }
+
+  Future<void> _editPart(Project project, Assembly assembly, Part part) async {
+    final name = TextEditingController(text: part.name);
+    final a = TextEditingController(text: '${part.a}');
+    final b = TextEditingController(text: '${part.b}');
+    final quantity = TextEditingController(text: '${part.quantity}');
+    final availableStocks = _stocksForProject(project);
+    if (availableStocks.isEmpty) {
+      _toast('Add a shared stock type before editing this part.');
+      return;
+    }
+    if (project.assemblies.isEmpty) {
+      _toast('Add an assembly before editing this part.');
+      return;
+    }
+    var stockId = availableStocks.any((stock) => stock.id == part.stockId)
+        ? part.stockId
+        : availableStocks.first.id;
+    var assemblyId = assembly.id;
+    var rotate = part.rotate;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, refresh) => AlertDialog(
+          title: Text('Edit ${part.name}'),
+          content: SizedBox(
+            width: 400,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextField(
+                controller: name,
+                decoration: const InputDecoration(labelText: 'Part name'),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                initialValue: stockId,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Shared stock'),
+                items: [
+                  for (final stock in availableStocks)
+                    DropdownMenuItem(
+                        value: stock.id,
+                        child: Text(_stockLabel(stock),
+                            overflow: TextOverflow.ellipsis))
+                ],
+                onChanged: (value) => refresh(() => stockId = value ?? stockId),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                initialValue: assemblyId,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Assembly'),
+                items: [
+                  for (final target in project.assemblies)
+                    DropdownMenuItem(
+                      value: target.id,
+                      child: Text(target.name, overflow: TextOverflow.ellipsis),
+                    ),
+                ],
+                onChanged: (value) =>
+                    refresh(() => assemblyId = value ?? assemblyId),
+              ),
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(
+                  child: TextField(
+                    controller: a,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      labelText: project.mode == CutMode.linear
+                          ? 'Length (${project.unit})'
+                          : 'Width (${project.unit})',
+                    ),
+                  ),
+                ),
+                if (project.mode == CutMode.sheet) ...[
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: b,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                          labelText: 'Height (${project.unit})'),
+                    ),
+                  ),
+                ],
+              ]),
+              const SizedBox(height: 8),
+              TextField(
+                controller: quantity,
+                keyboardType: TextInputType.number,
+                decoration:
+                    const InputDecoration(labelText: 'Quantity per assembly'),
+              ),
+              if (project.mode == CutMode.sheet)
+                CheckboxListTile(
+                  value: rotate,
+                  onChanged: (value) => refresh(() => rotate = value ?? rotate),
+                  title: const Text('Allow 90° rotation'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+            ]),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('Save part')),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return;
+    final updatedA = _num(a.text, 0);
+    final updatedB = project.mode == CutMode.sheet ? _num(b.text, 0) : 0.0;
+    final updatedQuantity = int.tryParse(quantity.text) ?? 0;
+    if (name.text.trim().isEmpty ||
+        updatedA <= 0 ||
+        (project.mode == CutMode.sheet && updatedB <= 0) ||
+        updatedQuantity <= 0) {
+      _toast('Enter a name, positive dimensions and a positive quantity.');
+      return;
+    }
+    setState(() {
+      final destination = project.assemblies
+          .firstWhere((candidate) => candidate.id == assemblyId);
+      if (updatedQuantity != part.quantity || destination != assembly) {
+        project.cutPieces.removeWhere((key) => key.startsWith('${part.id}:'));
+      }
+      part
+        ..name = name.text.trim()
+        ..a = updatedA
+        ..b = updatedB
+        ..quantity = updatedQuantity
+        ..stockId = stockId
+        ..rotate = rotate;
+      if (destination != assembly) {
+        assembly.parts.remove(part);
+        destination.parts.add(part);
+      }
+      final stock = _stockCatalog.firstWhere((item) => item.id == stockId);
+      if (!project.stocks.any((item) => item.id == stock.id)) {
+        project.stocks.add(stock);
+      }
+      project.updated = _date();
+      _result = null;
+    });
+    await _save();
   }
 
   Future<void> _optimise() async {
@@ -860,12 +1216,13 @@ class _AppShellState extends State<AppShell> {
       ['Cut Optimiser — production cut list'],
       ['Project', p.name],
       ['Mode', p.mode.name],
-      ['Material', p.material],
-      ['Variant', p.variant],
+      ['Materials', _projectMaterialSummary(p)],
+      ['Stock types', p.stocks.map((stock) => stock.name).join(', ')],
       ['Status', 'Heuristic plan — optimality not proven'],
       [],
       [
         'Stock unit',
+        'Assembly',
         'Part',
         'X / start',
         'Y',
@@ -879,6 +1236,7 @@ class _AppShellState extends State<AppShell> {
         for (final c in s.cuts) {
           rows.add([
             '${s.stockName} - Bar ${s.index}',
+            c.assemblyName,
             c.name,
             c.x,
             0,
@@ -893,6 +1251,7 @@ class _AppShellState extends State<AppShell> {
         for (final c in s.placements) {
           rows.add([
             '${s.stockName} - Sheet ${s.index}',
+            c.assemblyName,
             c.name,
             c.x,
             c.y,
@@ -924,85 +1283,342 @@ class _AppShellState extends State<AppShell> {
     final doc = pw.Document();
     doc.addPage(
       pw.MultiPage(
-        build: (ctx) => [
-          pw.Text('Cut Optimiser — Production Report',
-              style:
-                  pw.TextStyle(fontSize: 22, fontWeight: pw.FontWeight.bold)),
-          pw.SizedBox(height: 8),
-          pw.Text('Project: ${p.name}'),
-          pw.Text('Material: ${p.material} / ${p.variant}'),
-          pw.Text(
-              'Mode: ${p.mode.name} • Stock types: ${p.stocks.map((s) => s.name).join(', ')}'),
-          pw.Text('Generated: ${DateTime.now().toIso8601String()}'),
-          pw.SizedBox(height: 12),
-          pw.Container(
-            padding: const pw.EdgeInsets.all(8),
-            child: pw.Text(
-                'Heuristic solution — optimality not proven. Verify all dimensions and machine constraints before cutting.'),
-          ),
-          pw.SizedBox(height: 12),
-          pw.Table.fromTextArray(
-            headers: ['Metric', 'Value'],
-            data: [
-              ['Stock units', '${r.stockCount}'],
-              [
-                'Demand',
-                '${r.demandArea.toStringAsFixed(1)} ${p.unit}${p.mode == CutMode.sheet ? '²' : ''}'
-              ],
-              ['Estimated waste', '${(r.waste * 100).toStringAsFixed(1)}%'],
-              [
-                'Stock-specific kerf',
-                p.stocks.map((s) => '${s.name}: ${s.kerf} ${p.unit}').join('; ')
-              ],
-              [
-                'Stock-specific trim',
-                p.stocks.map((s) => '${s.name}: ${s.trim} ${p.unit}').join('; ')
-              ],
-            ],
-          ),
-          pw.SizedBox(height: 12),
-          pw.Text('Cut list',
-              style:
-                  pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
-          if (r.mode == CutMode.linear)
+        build: (ctx) {
+          final content = <pw.Widget>[
+            pw.Text('Cut Optimiser — Production Report',
+                style:
+                    pw.TextStyle(fontSize: 22, fontWeight: pw.FontWeight.bold)),
+            pw.SizedBox(height: 8),
+            pw.Text('Project: ${p.name}'),
+            pw.Text('Materials: ${_projectMaterialSummary(p)}'),
+            pw.Text(
+                'Mode: ${p.mode.name} • Stock types: ${p.stocks.map((s) => s.name).join(', ')}'),
+            pw.Text('Generated: ${DateTime.now().toIso8601String()}'),
+            pw.SizedBox(height: 12),
+            pw.Container(
+              padding: const pw.EdgeInsets.all(8),
+              child: pw.Text(
+                  'Heuristic solution — optimality not proven. Verify all dimensions and machine constraints before cutting.'),
+            ),
+            pw.SizedBox(height: 12),
             pw.Table.fromTextArray(
-              headers: ['Bar', 'Part', 'Start', 'Length'],
+              headers: ['Metric', 'Value'],
               data: [
-                for (final s in r.linear)
-                  for (final c in s.cuts)
-                    [
-                      '${s.stockName} ${s.index}',
-                      c.name,
-                      c.x.toStringAsFixed(1),
-                      c.w.toStringAsFixed(1)
-                    ]
-              ],
-            )
-          else
-            pw.Table.fromTextArray(
-              headers: ['Sheet', 'Part', 'X', 'Y', 'W', 'H', 'Rotated'],
-              data: [
-                for (final s in r.sheets)
-                  for (final c in s.placements)
-                    [
-                      '${s.stockName} ${s.index}',
-                      c.name,
-                      c.x.toStringAsFixed(1),
-                      c.y.toStringAsFixed(1),
-                      c.w.toStringAsFixed(1),
-                      c.h.toStringAsFixed(1),
-                      c.rotated ? 'Yes' : 'No'
-                    ]
+                ['Stock units', '${r.stockCount}'],
+                [
+                  'Demand',
+                  '${r.demandArea.toStringAsFixed(1)} ${p.unit}${p.mode == CutMode.sheet ? '²' : ''}'
+                ],
+                ['Estimated waste', '${(r.waste * 100).toStringAsFixed(1)}%'],
+                [
+                  'Stock-specific kerf',
+                  p.stocks
+                      .map((s) => '${s.name}: ${s.kerf} ${p.unit}')
+                      .join('; ')
+                ],
+                [
+                  'Stock-specific trim',
+                  p.stocks
+                      .map((s) => '${s.name}: ${s.trim} ${p.unit}')
+                      .join('; ')
+                ],
               ],
             ),
+            pw.SizedBox(height: 12),
+            pw.Text('Parts by assembly',
+                style:
+                    pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+          ];
+
+          for (final assembly in p.assemblies) {
+            content.addAll([
+              pw.SizedBox(height: 8),
+              pw.Text('${assembly.name} — ${assembly.quantity} to produce',
+                  style: pw.TextStyle(
+                      fontSize: 13, fontWeight: pw.FontWeight.bold)),
+              pw.Table.fromTextArray(
+                headers: [
+                  'Part',
+                  'Per assembly',
+                  'Total to cut',
+                  'Dimensions (${p.unit})',
+                  'Stock'
+                ],
+                data: [
+                  for (final part in assembly.parts)
+                    [
+                      part.name,
+                      '${part.quantity}',
+                      '${part.quantity * assembly.quantity}',
+                      p.mode == CutMode.linear
+                          ? '${part.a}'
+                          : '${part.a} × ${part.b}',
+                      p.stocks
+                              .where((stock) => stock.id == part.stockId)
+                              .map((stock) => stock.name)
+                              .firstOrNull ??
+                          'Unknown stock',
+                    ]
+                ],
+              ),
+            ]);
+          }
+
+          content.addAll([
+            pw.SizedBox(height: 12),
+            pw.Text('Cut list by assembly',
+                style:
+                    pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+          ]);
+          for (final assembly in p.assemblies) {
+            final placements = r.mode == CutMode.linear
+                ? [
+                    for (final stick in r.linear)
+                      for (final part in stick.cuts)
+                        if (part.assemblyName == assembly.name)
+                          (stick.stockName, stick.index, part)
+                  ]
+                : [
+                    for (final sheet in r.sheets)
+                      for (final part in sheet.placements)
+                        if (part.assemblyName == assembly.name)
+                          (sheet.stockName, sheet.index, part)
+                  ];
+            if (placements.isEmpty) continue;
+            content.addAll([
+              pw.SizedBox(height: 8),
+              pw.Text(assembly.name,
+                  style: pw.TextStyle(
+                      fontSize: 13, fontWeight: pw.FontWeight.bold)),
+              if (r.mode == CutMode.linear)
+                pw.Table.fromTextArray(
+                  headers: ['Bar', 'Part', 'Start', 'Length'],
+                  data: [
+                    for (final (stockName, index, part) in placements)
+                      [
+                        '$stockName $index',
+                        part.name,
+                        part.x.toStringAsFixed(1),
+                        part.w.toStringAsFixed(1)
+                      ]
+                  ],
+                )
+              else
+                pw.Table.fromTextArray(
+                  headers: ['Sheet', 'Part', 'X', 'Y', 'W', 'H', 'Rotated'],
+                  data: [
+                    for (final (stockName, index, part) in placements)
+                      [
+                        '$stockName $index',
+                        part.name,
+                        part.x.toStringAsFixed(1),
+                        part.y.toStringAsFixed(1),
+                        part.w.toStringAsFixed(1),
+                        part.h.toStringAsFixed(1),
+                        part.rotated ? 'Yes' : 'No'
+                      ]
+                  ],
+                ),
+            ]);
+          }
+
+          content.addAll([
+            pw.SizedBox(height: 14),
+            pw.Text('Notes: ${r.notes.join(' ')}'),
+          ]);
+          return content;
+        },
+      ),
+    );
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: pdf.PdfPageFormat.a4.landscape,
+        build: (ctx) => [
+          pw.Text('Cutting diagrams — ${p.name}',
+              style:
+                  pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 12),
-          pw.Text('Notes: ${r.notes.join(' ')}'),
+          if (r.mode == CutMode.linear)
+            for (final stick in r.linear) _pdfLinearDiagram(stick, p.unit)
+          else
+            for (final sheet in r.sheets)
+              _pdfSheetDiagram(
+                  sheet, p.unit, _trimForStock(p, sheet.stockName)),
         ],
       ),
     );
     await Printing.layoutPdf(
         onLayout: (_) async => doc.save(),
         name: '${p.name}_production_report.pdf');
+  }
+
+  pw.Widget _pdfLinearDiagram(LinearStick stick, String unit) {
+    const width = 740.0;
+    const left = 4.0;
+    const barTop = 22.0;
+    const barHeight = 24.0;
+    final scale = (width - left * 2) / stick.stockLength;
+    final colors = [
+      pdf.PdfColor.fromHex('#69B49B'),
+      pdf.PdfColor.fromHex('#8BB7E9'),
+      pdf.PdfColor.fromHex('#FFB16E'),
+      pdf.PdfColor.fromHex('#B2A1E2'),
+      pdf.PdfColor.fromHex('#7FC9D1'),
+    ];
+    return pw.Padding(
+      padding: const pw.EdgeInsets.only(top: 8),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text('${stick.stockName} — Bar ${stick.index}',
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(
+            height: 58,
+            child: pw.Stack(
+              children: [
+                pw.Positioned(
+                  left: left,
+                  top: barTop,
+                  child: pw.SizedBox(
+                    width: width - left * 2,
+                    height: barHeight,
+                    child: pw.Container(
+                      decoration: pw.BoxDecoration(
+                        color: pdf.PdfColor.fromHex('#E6EBF0'),
+                        border: pw.Border.all(
+                            color: pdf.PdfColor.fromHex('#405268')),
+                      ),
+                    ),
+                  ),
+                ),
+                for (var index = 0; index < stick.cuts.length; index++)
+                  pw.Positioned(
+                    left: left + stick.cuts[index].x * scale,
+                    top: barTop,
+                    child: pw.SizedBox(
+                      width: math.max(1.0, stick.cuts[index].w * scale),
+                      height: barHeight,
+                      child: pw.Container(
+                        alignment: pw.Alignment.center,
+                        padding: const pw.EdgeInsets.symmetric(horizontal: 1),
+                        decoration: pw.BoxDecoration(
+                          color: stick.cuts[index].isCut
+                              ? pdf.PdfColor.fromHex('#2F8D75')
+                              : colors[index % colors.length],
+                          border: pw.Border.all(
+                              color: pdf.PdfColor.fromHex('#FFFFFF')),
+                        ),
+                        child: pw.Text(
+                          '${stick.cuts[index].assemblyName}: ${stick.cuts[index].name}',
+                          maxLines: 1,
+                          overflow: pw.TextOverflow.clip,
+                          style: const pw.TextStyle(fontSize: 6),
+                        ),
+                      ),
+                    ),
+                  ),
+                pw.Positioned(
+                  left: left,
+                  top: 48,
+                  child: pw.Text('0 $unit',
+                      style: const pw.TextStyle(fontSize: 8)),
+                ),
+                pw.Positioned(
+                  right: left,
+                  top: 48,
+                  child: pw.Text(
+                      '${stick.stockLength.toStringAsFixed(0)} $unit',
+                      style: const pw.TextStyle(fontSize: 8)),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _pdfSheetDiagram(SheetLayout sheet, String unit, double trim) {
+    const maxWidth = 740.0;
+    const maxHeight = 410.0;
+    const inset = 8.0;
+    final scale = math.min(
+      (maxWidth - inset * 2) / sheet.stockW,
+      (maxHeight - inset * 2) / sheet.stockH,
+    );
+    final width = sheet.stockW * scale + inset * 2;
+    final height = sheet.stockH * scale + inset * 2;
+    final colors = [
+      pdf.PdfColor.fromHex('#FFC08A'),
+      pdf.PdfColor.fromHex('#91D1B7'),
+      pdf.PdfColor.fromHex('#9CC4F0'),
+      pdf.PdfColor.fromHex('#C2B3EA'),
+      pdf.PdfColor.fromHex('#F2D47E'),
+      pdf.PdfColor.fromHex('#9AD8DC'),
+    ];
+    return pw.Padding(
+      padding: const pw.EdgeInsets.only(top: 8),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text('${sheet.stockName} — Sheet ${sheet.index}',
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(
+            width: width,
+            height: height,
+            child: pw.Stack(
+              children: [
+                pw.Positioned(
+                  left: inset,
+                  top: inset,
+                  child: pw.SizedBox(
+                    width: sheet.stockW * scale,
+                    height: sheet.stockH * scale,
+                    child: pw.Container(
+                      decoration: pw.BoxDecoration(
+                        color: pdf.PdfColor.fromHex('#F8FAFC'),
+                        border: pw.Border.all(
+                            color: pdf.PdfColor.fromHex('#101B2A')),
+                      ),
+                    ),
+                  ),
+                ),
+                for (var index = 0; index < sheet.placements.length; index++)
+                  pw.Positioned(
+                    left: inset + (trim + sheet.placements[index].x) * scale,
+                    top: inset + (trim + sheet.placements[index].y) * scale,
+                    child: pw.SizedBox(
+                      width: sheet.placements[index].w * scale,
+                      height: sheet.placements[index].h * scale,
+                      child: pw.Container(
+                        alignment: pw.Alignment.center,
+                        padding: const pw.EdgeInsets.all(2),
+                        decoration: pw.BoxDecoration(
+                          color: sheet.placements[index].isCut
+                              ? pdf.PdfColor.fromHex('#2F8D75')
+                              : colors[index % colors.length],
+                          border: pw.Border.all(
+                              color: pdf.PdfColor.fromHex('#405268')),
+                        ),
+                        child: pw.Text(
+                          '${sheet.placements[index].assemblyName}: ${sheet.placements[index].name}\n${sheet.placements[index].w.toStringAsFixed(0)} × ${sheet.placements[index].h.toStringAsFixed(0)}',
+                          maxLines: 3,
+                          textAlign: pw.TextAlign.center,
+                          overflow: pw.TextOverflow.clip,
+                          style: const pw.TextStyle(fontSize: 7),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          pw.Text(
+              '${sheet.stockW.toStringAsFixed(0)} × ${sheet.stockH.toStringAsFixed(0)} $unit',
+              style: const pw.TextStyle(fontSize: 8)),
+        ],
+      ),
+    );
   }
 
   void _selectPage(int i) {
@@ -1037,7 +1653,7 @@ class _AppShellState extends State<AppShell> {
         Text(
           _active == null
               ? 'Create a project to get started'
-              : '${_active!.name}  •  ${_active!.material} / ${_active!.variant}',
+              : '${_active!.name}  •  ${_projectMaterialSummary(_active!)}',
           maxLines: 1,
           style: TextStyle(
             color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -1360,7 +1976,7 @@ class _AppShellState extends State<AppShell> {
               const Color(0xFF2F8D75)),
           MetricCard(
               'Material types',
-              '${_projects.map((p) => p.material).toSet().length}',
+              '${_stockCatalog.map((stock) => stock.material).toSet().length}',
               Icons.layers_outlined,
               const Color(0xFF467DC4)),
           MetricCard(
@@ -1413,7 +2029,7 @@ class _AppShellState extends State<AppShell> {
               title: Text(p.name,
                   style: const TextStyle(fontWeight: FontWeight.w700)),
               subtitle: Text(
-                  '${p.mode == CutMode.linear ? 'Linear' : 'Sheet'} • ${p.material} • ${p.totalPieces} parts'),
+                  '${p.mode == CutMode.linear ? 'Linear' : 'Sheet'} • ${_projectMaterialSummary(p)} • ${p.totalPieces} pieces'),
               trailing: const Icon(Icons.chevron_right),
               onTap: () {
                 setState(() {
@@ -1525,25 +2141,34 @@ class _AppShellState extends State<AppShell> {
                               style: TextStyle(
                                   fontSize: 16, fontWeight: FontWeight.w800)),
                           const SizedBox(height: 12),
-                          _infoLine('Material', _active?.material ?? '—'),
                           _infoLine(
-                              'Variant / profile', _active?.variant ?? '—'),
-                          _infoLine('Stock format', _active?.stock.name ?? '—'),
+                              'Materials',
+                              _active == null
+                                  ? '—'
+                                  : _projectMaterialSummary(_active!)),
                           _infoLine(
-                            'Stock dimensions',
+                              'Stock types',
+                              _active?.stocks
+                                      .map((stock) => stock.name)
+                                      .join(', ') ??
+                                  '—'),
+                          _infoLine(
+                            'Stock formats',
                             _active == null
                                 ? '—'
-                                : _active!.mode == CutMode.linear
-                                    ? '${_active!.stock.width} ${_active!.unit}'
-                                    : '${_active!.stock.width} × ${_active!.stock.height} ${_active!.unit}',
+                                : _active!.stocks
+                                    .map((stock) =>
+                                        '${stock.name} (${stock.mode == CutMode.linear ? '${stock.width}' : '${stock.width} × ${stock.height}'} ${stock.unit})')
+                                    .join(', '),
                           ),
                           _infoLine(
-                            'Available quantity',
+                            'Shared availability',
                             _active == null
                                 ? '—'
-                                : _active!.stock.quantity == 0
-                                    ? 'Auto-calculate'
-                                    : '${_active!.stock.quantity}',
+                                : _active!.stocks
+                                    .map((stock) =>
+                                        '${stock.name}: ${stock.quantity == 0 ? 'unlimited' : stock.quantity}')
+                                    .join(', '),
                           ),
                           const SizedBox(height: 12),
                           Text(
@@ -1571,78 +2196,60 @@ class _AppShellState extends State<AppShell> {
   Widget _materialsPage() =>
       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const SectionTitle('Materials & stock',
-            'Material variant, stock format, quantity, kerf, trim and cost.'),
+            'Maintain reusable material definitions and shared stock quantities for every project.'),
         const SizedBox(height: 14),
-        if (_active == null)
-          const EmptyState('No active project',
-              'Create a project to configure material and stock.')
-        else
-          Card(
-              child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(children: [
-                          const Icon(Icons.inventory_2_outlined, color: orange),
-                          const SizedBox(width: 10),
-                          Expanded(
-                              child: Text(_active!.material,
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 18))),
-                          StatusPill(_active!.mode == CutMode.linear
-                              ? 'LINEAR'
-                              : 'SHEET')
-                        ]),
-                        const SizedBox(height: 16),
-                        _infoLine('Variant', _active!.variant),
-                        _infoLine('Stock format', _active!.stock.name),
-                        _infoLine(
-                            _active!.mode == CutMode.linear
-                                ? 'Stock length'
-                                : 'Stock width',
-                            '${_active!.stock.width} ${_active!.unit}'),
-                        if (_active!.mode == CutMode.sheet)
-                          _infoLine('Stock height',
-                              '${_active!.stock.height} ${_active!.unit}'),
-                        _infoLine(
-                            'Available quantity',
-                            _active!.stock.quantity == 0
-                                ? 'Auto-calculate'
-                                : '${_active!.stock.quantity}'),
-                        _infoLine(
-                            'Cost per stock unit',
-                            _active!.stock.price == 0
-                                ? 'Not specified'
-                                : _active!.stock.price.toStringAsFixed(2)),
-                        _infoLine('Kerf / edge trim',
-                            '${_active!.kerf} / ${_active!.trim} ${_active!.unit}'),
-                        const Divider(height: 28),
-                        FilledButton.icon(
-                            onPressed: _editProject,
-                            icon: const Icon(Icons.tune),
-                            label: const Text('Configure material & stock')),
-                        const SizedBox(height: 8),
-                        OutlinedButton.icon(
-                            onPressed: _manageStocks,
-                            icon: const Icon(Icons.category_outlined),
-                            label: Text(
-                                'Manage stock types (${_active!.stocks.length})')),
-                        const SizedBox(height: 10),
-                        for (final stock in _active!.stocks)
-                          ListTile(
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              leading: const Icon(Icons.inventory_2_outlined),
-                              title: Text(stock.name),
-                              subtitle: Text(_active!.mode == CutMode.linear
-                                  ? 'Length ${stock.width} ${_active!.unit}'
-                                  : '${stock.width} × ${stock.height} ${_active!.unit}'),
-                              trailing: Text(stock.price == 0
-                                  ? ''
-                                  : stock.price.toStringAsFixed(2)))
-                      ]))),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  const Icon(Icons.inventory_2_outlined, color: orange),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Text('Global stock catalog',
+                        style: TextStyle(
+                            fontWeight: FontWeight.w800, fontSize: 18)),
+                  ),
+                  StatusPill('${_stockCatalog.length} TYPES'),
+                ]),
+                const SizedBox(height: 8),
+                Text(
+                  'Material and available quantities are shared across projects. Optimising a project checks the available quantity but does not reserve or deduct stock.',
+                  style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      height: 1.4),
+                ),
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed: _manageStocks,
+                  icon: const Icon(Icons.tune),
+                  label: const Text('Manage shared materials & stock'),
+                ),
+                if (_stockCatalog.isEmpty) ...[
+                  const SizedBox(height: 12),
+                  const Text(
+                      'No shared stock types yet. Add one to assign it to assembly parts.'),
+                ],
+                for (final stock in _stockCatalog)
+                  ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(stock.mode == CutMode.linear
+                        ? Icons.linear_scale
+                        : Icons.grid_view),
+                    title: Text('${stock.material} ${stock.variant}'.trim()),
+                    subtitle: Text(
+                      '${stock.name} • ${stock.mode == CutMode.linear ? '${stock.width} ${stock.unit}' : '${stock.width} × ${stock.height} ${stock.unit}'} • ${stock.quantity == 0 ? 'Unlimited' : 'Available: ${stock.quantity}'}',
+                    ),
+                    trailing: Text(
+                        stock.price == 0 ? '' : stock.price.toStringAsFixed(2)),
+                  ),
+              ],
+            ),
+          ),
+        ),
         const SizedBox(height: 16),
         const PrototypeNotice()
       ]);
@@ -1651,12 +2258,12 @@ class _AppShellState extends State<AppShell> {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         const Expanded(
-            child: SectionTitle(
-                'Parts list', 'Enter each part size and demand quantity.')),
+            child: SectionTitle('Assemblies & parts',
+                'Define assemblies to produce, then list each assembly’s component parts.')),
         FilledButton.icon(
-            onPressed: p == null ? null : _addPart,
+            onPressed: p == null ? null : _addAssembly,
             icon: const Icon(Icons.add),
-            label: const Text('Add part'))
+            label: const Text('Add assembly'))
       ]),
       const SizedBox(height: 14),
       if (p == null)
@@ -1670,7 +2277,7 @@ class _AppShellState extends State<AppShell> {
                 Expanded(
                     child: Text(p.name,
                         style: const TextStyle(fontWeight: FontWeight.w800))),
-                StatusPill(p.mode == CutMode.linear ? 'LENGTHS' : 'RECTANGLES'),
+                StatusPill(p.mode == CutMode.linear ? 'LINEAR' : 'SHEET'),
                 const SizedBox(width: 8),
                 Text(
                   '${p.totalPieces} pcs',
@@ -1681,27 +2288,27 @@ class _AppShellState extends State<AppShell> {
                 )
               ])),
           const Divider(height: 1),
-          if (p.parts.isEmpty)
+          if (p.assemblies.isEmpty)
             const Padding(
                 padding: EdgeInsets.all(30),
-                child: Text(
-                    'No parts added yet. Use “Add part” to enter your cutting demand.'))
-          else ...[for (var i = 0; i < p.parts.length; i++) _partRow(p, i)],
+                child: Text('No assemblies defined. Add an assembly to begin.'))
+          else
+            for (final assembly in p.assemblies) _assemblyCard(p, assembly),
           const Divider(height: 1),
           Padding(
               padding: const EdgeInsets.all(14),
               child: Row(children: [
                 Expanded(
                     child: Text(
-                        '${p.parts.length} demand lines • ${p.totalPieces} total pieces',
+                        '${p.assemblies.length} assemblies • ${p.parts.length} part definitions • ${p.totalPieces} pieces to cut',
                         style: TextStyle(
                             color:
                                 Theme.of(context).colorScheme.onSurfaceVariant,
                             fontSize: 12))),
                 OutlinedButton.icon(
-                    onPressed: _addPart,
+                    onPressed: _addAssembly,
                     icon: const Icon(Icons.add, size: 16),
-                    label: const Text('Add part'))
+                    label: const Text('Assembly'))
               ]))
         ])),
       const SizedBox(height: 16),
@@ -1709,120 +2316,117 @@ class _AppShellState extends State<AppShell> {
     ]);
   }
 
-  Widget _partRow(Project p, int i) {
-    final part = p.parts[i];
-    return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        child: Row(children: [
-          Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(8)),
-              child: Center(
-                  child: Text('${i + 1}',
-                      style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                          color: Theme.of(context)
-                              .colorScheme
-                              .onSurfaceVariant)))),
-          const SizedBox(width: 12),
-          Expanded(
-              flex: 3,
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(part.name,
-                        style: const TextStyle(fontWeight: FontWeight.w700)),
-                    Text(
-                        p.mode == CutMode.linear
-                            ? 'Length ${part.a} ${p.unit}'
-                            : '${part.a} × ${part.b} ${p.unit}${part.rotate ? ' • rotation allowed' : ''}',
-                        style: TextStyle(
-                            fontSize: 12,
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurfaceVariant)),
-                    Text(
-                        'Stock: ${p.stocks.firstWhere((s) => s.id == part.stockId, orElse: () => p.stock).name}',
-                        style: TextStyle(
-                            fontSize: 12,
-                            color:
-                                Theme.of(context).colorScheme.onSurfaceVariant))
-                  ])),
-          Text('× ${part.quantity}',
-              style: const TextStyle(fontWeight: FontWeight.w800)),
-          IconButton(
-              tooltip: 'Edit quantity',
-              onPressed: () => _editPartQuantity(p, part),
-              icon: const Icon(Icons.edit_outlined, size: 18)),
-          IconButton(
-              tooltip: 'Remove part',
-              onPressed: () async {
-                setState(() {
-                  p.parts.removeAt(i);
-                  _result = null;
-                });
-                await _save();
-              },
-              icon: const Icon(Icons.delete_outline,
-                  size: 18, color: Color(0xFFB65B4D)))
-        ]));
-  }
+  Widget _assemblyCard(Project project, Assembly assembly) => Card(
+        margin: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+        child: Column(
+          children: [
+            ListTile(
+              title: Text(assembly.name,
+                  style: const TextStyle(fontWeight: FontWeight.w800)),
+              subtitle: Text(
+                  '${assembly.quantity} to produce • ${assembly.parts.fold<int>(0, (sum, part) => sum + part.quantity)} parts per assembly • ${assembly.quantity * assembly.parts.fold<int>(0, (sum, part) => sum + part.quantity)} total cuts'),
+              trailing: Wrap(children: [
+                IconButton(
+                  tooltip: 'Edit assembly quantity and name',
+                  onPressed: () => _editAssembly(assembly),
+                  icon: const Icon(Icons.edit_outlined),
+                ),
+                IconButton(
+                  tooltip: 'Remove assembly',
+                  onPressed: () async {
+                    setState(() {
+                      for (final part in assembly.parts) {
+                        project.cutPieces.removeWhere(
+                            (key) => key.startsWith('${part.id}:'));
+                      }
+                      project.assemblies.remove(assembly);
+                      project.updated = _date();
+                      _result = null;
+                    });
+                    await _save();
+                  },
+                  icon: const Icon(Icons.delete_outline,
+                      color: Color(0xFFB65B4D)),
+                ),
+              ]),
+            ),
+            if (assembly.parts.isEmpty)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 12),
+                child: Text('No parts in this assembly yet.'),
+              )
+            else
+              for (var index = 0; index < assembly.parts.length; index++)
+                _partRow(project, assembly, assembly.parts[index], index),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  onPressed: () => _addPart(assembly),
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('Add part to assembly'),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
 
-  Future<void> _editPartQuantity(Project p, Part part) async {
-    final ctl = TextEditingController(text: '${part.quantity}');
-    var stockId = part.stockId;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (c) => StatefulBuilder(
-          builder: (context, refresh) => AlertDialog(
-                title: Text('Edit ${part.name}'),
-                content: SizedBox(
-                    width: 360,
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      TextField(
-                          controller: ctl,
-                          keyboardType: TextInputType.number,
-                          decoration:
-                              const InputDecoration(labelText: 'Quantity')),
-                      const SizedBox(height: 12),
-                      DropdownButtonFormField<String>(
-                        initialValue: stockId,
-                        decoration:
-                            const InputDecoration(labelText: 'Stock type'),
-                        items: [
-                          for (final stock in p.stocks)
-                            DropdownMenuItem(
-                                value: stock.id, child: Text(stock.name))
-                        ],
-                        onChanged: (value) =>
-                            refresh(() => stockId = value ?? p.stocks.first.id),
-                      ),
-                    ])),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.pop(c, false),
-                      child: const Text('Cancel')),
-                  FilledButton(
-                      onPressed: () => Navigator.pop(c, true),
-                      child: const Text('Save')),
-                ],
-              )),
+  Widget _partRow(Project project, Assembly assembly, Part part, int index) {
+    final assignedStock =
+        _stockCatalog.where((item) => item.id == part.stockId);
+    final stockName =
+        assignedStock.isEmpty ? 'Unknown stock' : assignedStock.first.name;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Row(children: [
+        SizedBox(
+          width: 24,
+          child: Text('${index + 1}',
+              style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant)),
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(part.name,
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
+              Text(
+                '${project.mode == CutMode.linear ? 'Length ${part.a}' : '${part.a} × ${part.b}'} ${project.unit} • ${part.quantity} per assembly • $stockName',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ),
+        IconButton(
+          tooltip: 'Edit part name, dimensions and quantity',
+          onPressed: () => _editPart(project, assembly, part),
+          icon: const Icon(Icons.edit_outlined, size: 18),
+        ),
+        IconButton(
+          tooltip: 'Remove part',
+          onPressed: () async {
+            setState(() {
+              assembly.parts.remove(part);
+              project.cutPieces
+                  .removeWhere((key) => key.startsWith('${part.id}:'));
+              project.updated = _date();
+              _result = null;
+            });
+            await _save();
+          },
+          icon: const Icon(Icons.delete_outline,
+              size: 18, color: Color(0xFFB65B4D)),
+        ),
+      ]),
     );
-    if (ok == true) {
-      final n = int.tryParse(ctl.text) ?? 0;
-      if (n > 0) {
-        setState(() {
-          part.quantity = n;
-          part.stockId = stockId;
-          p.updated = _date();
-          _result = null;
-        });
-        await _save();
-      }
-    }
   }
 
   Widget _resultsPage() {
@@ -1926,7 +2530,7 @@ class _AppShellState extends State<AppShell> {
                       '${(r.waste * 100).toStringAsFixed(1)}%',
                       Icons.recycling_outlined,
                       const Color(0xFF2F8D75)),
-                  MetricCard('Stock format', p.stock.name,
+                  MetricCard('Stock types', '${p.stocks.length}',
                       Icons.view_agenda_outlined, const Color(0xFF8A65C5)),
                 ],
               );
@@ -2207,7 +2811,7 @@ class _AppShellState extends State<AppShell> {
                               size: 16, color: Color(0xFF2F8D75))
                           : null,
                       label: Text(
-                          '${group.length > 1 ? 'Bar ${item.index}: ' : ''}${part.name}: ${part.w.toStringAsFixed(0)} ${project.unit}${part.isCut ? ' · Cut' : ''}',
+                          '${group.length > 1 ? 'Bar ${item.index}: ' : ''}${part.assemblyName}: ${part.name}: ${part.w.toStringAsFixed(0)} ${project.unit}${part.isCut ? ' · Cut' : ''}',
                           style: const TextStyle(fontSize: 11)),
                       visualDensity: VisualDensity.compact,
                       onSelected: (_) => _togglePartCut(part),
@@ -2311,7 +2915,7 @@ class _AppShellState extends State<AppShell> {
                               size: 16, color: Color(0xFF2F8D75))
                           : null,
                       label: Text(
-                          '${group.length > 1 ? 'Sheet ${item.index}: ' : ''}${part.name} · ${part.w.toStringAsFixed(0)}×${part.h.toStringAsFixed(0)}${part.isCut ? ' · Cut' : ''}',
+                          '${group.length > 1 ? 'Sheet ${item.index}: ' : ''}${part.assemblyName}: ${part.name} · ${part.w.toStringAsFixed(0)}×${part.h.toStringAsFixed(0)}${part.isCut ? ' · Cut' : ''}',
                           style: const TextStyle(fontSize: 11)),
                       visualDensity: VisualDensity.compact,
                       onSelected: (_) => _togglePartCut(part),
@@ -2583,7 +3187,7 @@ class LinearDiagramPainter extends CustomPainter {
       if (rect.width > 30) {
         final tp = TextPainter(
             text: TextSpan(
-                text: c.isCut ? '${c.name} ✓' : c.name,
+                text: '${c.assemblyName}: ${c.name}${c.isCut ? ' ✓' : ''}',
                 style: TextStyle(
                     fontSize: 10,
                     color: c.isCut ? Colors.white : ink,
@@ -2695,7 +3299,7 @@ class SheetDiagramPainter extends CustomPainter {
         final text = TextPainter(
             text: TextSpan(
                 text:
-                    '${p.name}${p.isCut ? ' ✓' : ''}\n${p.w.toStringAsFixed(0)}×${p.h.toStringAsFixed(0)}',
+                    '${p.assemblyName}: ${p.name}${p.isCut ? ' ✓' : ''}\n${p.w.toStringAsFixed(0)}×${p.h.toStringAsFixed(0)}',
                 style: TextStyle(
                     fontSize: math.min(11, math.max(7, scale * 13)),
                     color: p.isCut ? Colors.white : ink,
