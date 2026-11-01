@@ -145,6 +145,7 @@ class _AppShellState extends State<AppShell> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   int _page = 0;
   bool _loading = true;
+  bool _showArchivedProjects = false;
   final List<Project> _projects = [];
   final List<StockConfig> _stockCatalog = [];
   final List<String> _pages = [
@@ -204,7 +205,7 @@ class _AppShellState extends State<AppShell> {
       }
       project.bindStocks(_stockCatalog);
     }
-    if (_projects.isEmpty) {
+    if (_projects.isEmpty && raw == null) {
       final linearStocks = _stockCatalog
           .where((item) => item.mode == CutMode.linear && item.unit == 'mm')
           .toList();
@@ -240,8 +241,10 @@ class _AppShellState extends State<AppShell> {
       _result = CuttingEngine.solve(sample);
       await _save();
     } else {
-      _active = _projects.first;
-      _result = CuttingEngine.solve(_active!);
+      final activeProjects =
+          _projects.where((project) => !project.archived).toList();
+      _active = activeProjects.isEmpty ? null : activeProjects.first;
+      _result = _active == null ? null : CuttingEngine.solve(_active!);
     }
     if (mounted) setState(() => _loading = false);
   }
@@ -422,6 +425,67 @@ class _AppShellState extends State<AppShell> {
       });
       await _save();
     }
+  }
+
+  Future<void> _archiveProject(Project project) async {
+    setState(() {
+      project.archived = true;
+      project.updated = _date();
+      if (_active?.id == project.id) {
+        final remaining =
+            _projects.where((candidate) => !candidate.archived).toList();
+        _active = remaining.isEmpty ? null : remaining.first;
+        _result = _active == null ? null : CuttingEngine.solve(_active!);
+      }
+    });
+    await _save();
+  }
+
+  Future<void> _restoreProject(Project project) async {
+    setState(() {
+      project.archived = false;
+      project.updated = _date();
+      if (_active == null) {
+        _active = project;
+        _result = CuttingEngine.solve(project);
+      }
+    });
+    await _save();
+  }
+
+  Future<void> _deleteProject(Project project) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete project?'),
+        content: Text(
+            '“${project.name}” and its assemblies and parts will be permanently deleted. This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFB65B4D)),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete project'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() {
+      _projects.removeWhere((candidate) => candidate.id == project.id);
+      if (_active?.id == project.id) {
+        final remaining =
+            _projects.where((candidate) => !candidate.archived).toList();
+        _active = remaining.isEmpty ? null : remaining.first;
+        _result = _active == null ? null : CuttingEngine.solve(_active!);
+      }
+    });
+    await _save();
   }
 
   Future<void> _editProject() async {
@@ -890,7 +954,15 @@ class _AppShellState extends State<AppShell> {
         TextEditingController(text: p.mode == CutMode.linear ? '0' : '400');
     final q = TextEditingController(text: '1');
     var rotate = true;
-    var selectedStockId = availableStocks.first.id;
+    final lastPart = assembly.parts.isNotEmpty
+        ? assembly.parts.last
+        : p.parts.isNotEmpty
+            ? p.parts.last
+            : null;
+    var selectedStockId =
+        availableStocks.any((stock) => stock.id == lastPart?.stockId)
+            ? lastPart!.stockId
+            : availableStocks.first.id;
 
     final part = await showDialog<Part>(
       context: context,
@@ -1951,7 +2023,9 @@ class _AppShellState extends State<AppShell> {
   }
 
   Widget _dashboard() {
-    final pieces = _projects.fold<int>(0, (s, p) => s + p.totalPieces);
+    final activeProjects =
+        _projects.where((project) => !project.archived).toList();
+    final pieces = activeProjects.fold<int>(0, (s, p) => s + p.totalPieces);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         const Expanded(
@@ -1970,7 +2044,7 @@ class _AppShellState extends State<AppShell> {
                 ? 2
                 : 1;
         final cards = [
-          MetricCard('Projects', '${_projects.length}',
+          MetricCard('Projects', '${activeProjects.length}',
               Icons.folder_copy_outlined, orange),
           MetricCard('Part demand', '$pieces pcs', Icons.view_list_outlined,
               const Color(0xFF2F8D75)),
@@ -2013,7 +2087,7 @@ class _AppShellState extends State<AppShell> {
       const SizedBox(height: 10),
       Card(
           child: Column(children: [
-        for (final p in _projects.take(6))
+        for (final p in activeProjects.take(6))
           ListTile(
               leading: CircleAvatar(
                   backgroundColor: p.mode == CutMode.linear
@@ -2071,9 +2145,10 @@ class _AppShellState extends State<AppShell> {
                             initialValue: _active?.id,
                             isExpanded: true,
                             decoration: const InputDecoration(
-                                labelText: 'Select project'),
+                                labelText: 'Select active project'),
                             items: [
-                              for (final p in _projects)
+                              for (final p in _projects
+                                  .where((project) => !project.archived))
                                 DropdownMenuItem(
                                     value: p.id,
                                     child: Text(p.name,
@@ -2190,9 +2265,101 @@ class _AppShellState extends State<AppShell> {
             ),
           ),
           const SizedBox(height: 18),
+          _projectManagementCard(),
+          const SizedBox(height: 18),
           const PrototypeNotice(),
         ],
       );
+
+  Widget _projectManagementCard() {
+    final visibleProjects = _projects
+        .where((project) => project.archived == _showArchivedProjects)
+        .toList();
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _showArchivedProjects ? 'Archived projects' : 'Projects',
+                    style: const TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.w800),
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: () => setState(
+                      () => _showArchivedProjects = !_showArchivedProjects),
+                  icon: Icon(_showArchivedProjects
+                      ? Icons.folder_open_outlined
+                      : Icons.archive_outlined),
+                  label: Text(
+                      _showArchivedProjects ? 'Show active' : 'Show archived'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            if (visibleProjects.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                child: Text(_showArchivedProjects
+                    ? 'No archived projects.'
+                    : 'No active projects. Create a project or restore one from the archive.'),
+              )
+            else
+              for (final project in visibleProjects)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    project.archived
+                        ? Icons.archive_outlined
+                        : project.mode == CutMode.linear
+                            ? Icons.linear_scale
+                            : Icons.grid_view,
+                  ),
+                  title: Text(project.name,
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                  subtitle: Text(
+                      '${project.mode == CutMode.linear ? 'Linear' : 'Sheet'} • ${project.totalPieces} pieces${_active?.id == project.id ? ' • Active' : ''}'),
+                  onTap: project.archived
+                      ? null
+                      : () => setState(() {
+                            _active = project;
+                            _result = CuttingEngine.solve(project);
+                          }),
+                  trailing: Wrap(
+                    spacing: 4,
+                    children: [
+                      if (project.archived)
+                        IconButton(
+                          tooltip: 'Restore project',
+                          onPressed: () => _restoreProject(project),
+                          icon: const Icon(Icons.unarchive_outlined),
+                        )
+                      else
+                        IconButton(
+                          tooltip: 'Archive project',
+                          onPressed: () => _archiveProject(project),
+                          icon: const Icon(Icons.archive_outlined),
+                        ),
+                      IconButton(
+                        tooltip: 'Delete project',
+                        onPressed: () => _deleteProject(project),
+                        icon: const Icon(Icons.delete_outline,
+                            color: Color(0xFFB65B4D)),
+                      ),
+                    ],
+                  ),
+                ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _materialsPage() =>
       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const SectionTitle('Materials & stock',
@@ -2536,6 +2703,40 @@ class _AppShellState extends State<AppShell> {
               );
             },
           ),
+          const SizedBox(height: 14),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Required stock by type',
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Stock units required for this project, compared with shared availability.',
+                    style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        fontSize: 12),
+                  ),
+                  const SizedBox(height: 8),
+                  for (final stock in p.stocks)
+                    _stockRequirementRow(
+                      stock,
+                      p.mode == CutMode.linear
+                          ? r.linear
+                              .where((stick) => stick.stockId == stock.id)
+                              .length
+                          : r.sheets
+                              .where((sheet) => sheet.stockId == stock.id)
+                              .length,
+                      p.mode,
+                    ),
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: 18),
           Card(
             child: Padding(
@@ -2603,6 +2804,45 @@ class _AppShellState extends State<AppShell> {
           ),
         ],
       ],
+    );
+  }
+
+  Widget _stockRequirementRow(StockConfig stock, int required, CutMode mode) {
+    final overAvailable = stock.quantity > 0 && required > stock.quantity;
+    final quantityLabel = stock.quantity == 0
+        ? 'Unlimited available'
+        : '${stock.quantity} available';
+    final unitLabel = mode == CutMode.linear ? 'bars' : 'sheets';
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(
+        mode == CutMode.linear ? Icons.linear_scale : Icons.grid_view,
+        color: overAvailable ? const Color(0xFFB65B4D) : orange,
+      ),
+      title: Text(
+        '${stock.material}${stock.variant.isNotEmpty ? ' • ${stock.variant}' : ''}',
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+      subtitle: Text('${stock.name} • $quantityLabel'),
+      trailing: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Text(
+            '$required $unitLabel required',
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              color: overAvailable ? const Color(0xFFB65B4D) : null,
+            ),
+          ),
+          if (overAvailable)
+            const Text(
+              'Insufficient stock',
+              style: TextStyle(color: Color(0xFFB65B4D), fontSize: 11),
+            ),
+        ],
+      ),
     );
   }
 

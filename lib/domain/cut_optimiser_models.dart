@@ -158,6 +158,7 @@ class Project {
     List<Assembly>? assemblies,
     Set<String>? cutPieces,
     this.updated = '',
+    this.archived = false,
   })  : stocks = stocks ?? [stock ?? StockConfig()],
         assemblies = assemblies ??
             [
@@ -184,6 +185,7 @@ class Project {
     required this.assemblies,
     required this.cutPieces,
     required this.updated,
+    required this.archived,
   }) {
     _assignDefaultStock();
   }
@@ -200,6 +202,7 @@ class Project {
   List<Assembly> assemblies;
   Set<String> cutPieces;
   String updated;
+  bool archived;
 
   StockConfig get stock =>
       stocks.isEmpty ? StockConfig(mode: mode, unit: unit) : stocks.first;
@@ -245,6 +248,7 @@ class Project {
         if (includeStockDefinitions && stocks.isNotEmpty)
           'stock': stock.toJson(),
         'updated': updated,
+        'archived': archived,
       };
 
   factory Project.fromJson(Map<String, dynamic> json) {
@@ -298,6 +302,7 @@ class Project {
           .map((entry) => entry.toString())
           .toSet(),
       updated: json['updated'] ?? '',
+      archived: json['archived'] as bool? ?? false,
     );
   }
 

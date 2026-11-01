@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:cut_optimiser/main.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -77,6 +79,58 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  testWidgets('new part defaults to the last part stock type',
+      (WidgetTester tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    final firstStock = StockConfig(
+      id: 'stock-first',
+      name: 'First profile',
+      width: 6000,
+    );
+    final recentStock = StockConfig(
+      id: 'stock-recent',
+      name: 'Recent profile',
+      width: 3000,
+    );
+    final project = Project(
+      name: 'Stock preference',
+      mode: CutMode.linear,
+      stocks: [firstStock, recentStock],
+      assemblies: [
+        Assembly(
+          name: 'Frame',
+          parts: [
+            Part(name: 'Recent rail', a: 800, stockId: recentStock.id),
+          ],
+        ),
+      ],
+    );
+    SharedPreferences.setMockInitialValues({
+      'cut_optimiser_projects_v1': jsonEncode([
+        project.toJson(includeStockDefinitions: false),
+      ]),
+      'cut_optimiser_stocks_v1':
+          jsonEncode([firstStock.toJson(), recentStock.toJson()]),
+    });
+
+    await tester.pumpWidget(const CutOptimiserApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(PopupMenuButton<int>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Parts list').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add part to assembly'));
+    await tester.pumpAndSettle();
+
+    final stockDropdown = tester.widget<DropdownButtonFormField<String>>(
+        find.byType(DropdownButtonFormField<String>).first);
+    expect(stockDropdown.initialValue, recentStock.id);
+    expect(
+        find.text('Mild steel 25×25×1.6 mm — Recent profile'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   testWidgets('part editor can reassign a part to another assembly',
       (WidgetTester tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.linux;
@@ -114,6 +168,98 @@ void main() {
         findsOneWidget);
     expect(find.text('Upright'), findsOneWidget);
     expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('optimisation results show required stock by stock type',
+      (WidgetTester tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    SharedPreferences.setMockInitialValues({});
+
+    await tester.pumpWidget(const CutOptimiserApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(PopupMenuButton<int>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Optimisation results').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Required stock by type'), findsOneWidget);
+    expect(find.textContaining('bars required'), findsWidgets);
+    expect(find.textContaining('available'), findsWidgets);
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('projects can be archived and restored',
+      (WidgetTester tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    SharedPreferences.setMockInitialValues({});
+
+    await tester.pumpWidget(const CutOptimiserApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(PopupMenuButton<int>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Projects').last);
+    await tester.pumpAndSettle();
+
+    final archiveButton = find.byTooltip('Archive project').first;
+    await tester.ensureVisible(archiveButton);
+    await tester.tap(archiveButton);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('No active projects.'), findsOneWidget);
+    final preferences = await SharedPreferences.getInstance();
+    expect(
+      preferences.getString('cut_optimiser_projects_v1'),
+      contains('"archived":true'),
+    );
+
+    await tester.tap(find.text('Show archived'));
+    await tester.pumpAndSettle();
+    expect(find.text('Workshop — frame set'), findsWidgets);
+    final restoreButton = find.byTooltip('Restore project').first;
+    await tester.ensureVisible(restoreButton);
+    await tester.tap(restoreButton);
+    await tester.pumpAndSettle();
+
+    expect(find.text('No archived projects.'), findsOneWidget);
+    expect(find.textContaining('Active'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('project deletion requires confirmation',
+      (WidgetTester tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    SharedPreferences.setMockInitialValues({});
+
+    await tester.pumpWidget(const CutOptimiserApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(PopupMenuButton<int>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Projects').last);
+    await tester.pumpAndSettle();
+
+    final deleteButton = find.byTooltip('Delete project').first;
+    await tester.ensureVisible(deleteButton);
+    await tester.tap(deleteButton);
+    await tester.pumpAndSettle();
+    expect(find.text('Delete project?'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.text('Workshop — frame set'), findsWidgets);
+
+    await tester.ensureVisible(deleteButton);
+    await tester.tap(deleteButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete project').last);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('No active projects.'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(const CutOptimiserApp());
+    await tester.pumpAndSettle();
+    expect(find.text('Workshop — frame set'), findsNothing);
     debugDefaultTargetPlatformOverride = null;
   });
 

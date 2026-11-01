@@ -7,10 +7,11 @@ A responsive, offline-first Flutter prototype for cutting plans on **linear stoc
 - Dashboard with project and demand summaries.
 - Circular-saw branding with matching Android and Windows launcher icons.
 - Create and select local projects with named assemblies and production quantities; per-assembly part quantities are multiplied by the number of assemblies to produce.
+- Archive projects for later restoration or permanently delete them with confirmation.
 - Maintain a global material and stock catalog, including dimensions, units, available quantities, kerf, trim, and cost, then reuse those stock types in projects.
 - Add/remove assemblies and parts; edit each part's name, dimensions, per-assembly quantity, stock type, and sheet rotation preference.
-- Linear cutting: compares best-fit and first-fit packing across descending, ascending and entered part orders, with kerf and trim accounting.
-- Sheet cutting: compares area, longest-side, width, height and perimeter part orders, then keeps the layout with the fewest sheets and best compactness; supports optional 90° rotation, kerf and edge trim.
+- Linear cutting: compares best-fit and first-fit packing across multiple part orders, prioritising the fewest stock bars, then balancing residual offcuts; includes kerf and trim.
+- Sheet cutting: compares deterministic orderings by area, side lengths, perimeter and aspect ratio in both directions. It prioritises the fewest sheets, then the most compact layout; supports optional 90° rotation, kerf and edge trim.
 - Scaled linear and sheet diagrams.
 - Mark individual placed parts as cut directly on the diagrams or from their part chips; cut status is saved with the project.
 - Cutting diagrams label the remaining bar offcut length and the unused sheet area.
@@ -93,7 +94,7 @@ Distribute the complete `build\windows\x64\runner\Release` directory (or zip its
 
 ## Automated GitHub releases
 
-The GitHub Actions release workflow runs `flutter analyze` and `flutter test`, then builds Windows x64, Linux x64, and Android arm64. Push a version tag matching the version in `pubspec.yaml` (for example, `v0.2.0`) to create a GitHub Release containing:
+The GitHub Actions release workflow runs `flutter analyze` and `flutter test`, then builds Windows x64, Linux x64, and Android arm64. Push a version tag matching the version in `pubspec.yaml` (for example, `v0.2.1`) to create a GitHub Release containing:
 
 - `cut_optimiser-windows-x64.zip`
 - `cut_optimiser-linux-x64.tar.gz`

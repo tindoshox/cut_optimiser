@@ -6,9 +6,10 @@ import 'cut_optimiser_models.dart';
 
 class LinearStick {
   LinearStick(this.index, this.cuts, this.used, this.stockLength,
-      {this.stockName = 'Stock'});
+      {this.stockName = 'Stock', this.stockId = ''});
 
   String stockName;
+  String stockId;
   int index;
   List<PlacedPart> cuts;
   double used;
@@ -23,6 +24,7 @@ List<List<LinearStick>> groupLinearDiagrams(
   final groups = <String, List<LinearStick>>{};
   for (final diagram in diagrams) {
     final key = jsonEncode([
+      diagram.stockId,
       diagram.stockName,
       diagram.stockLength,
       trimFor(diagram),
@@ -62,9 +64,10 @@ class PlacedPart {
 class SheetLayout {
   SheetLayout(
       this.index, this.placements, this.stockW, this.stockH, this.usedArea,
-      {this.stockName = 'Stock'});
+      {this.stockName = 'Stock', this.stockId = ''});
 
   final String stockName;
+  final String stockId;
   final int index;
   final List<PlacedPart> placements;
   final double stockW, stockH;
@@ -79,6 +82,7 @@ List<List<SheetLayout>> groupSheetDiagrams(
   final groups = <String, List<SheetLayout>>{};
   for (final diagram in diagrams) {
     final key = jsonEncode([
+      diagram.stockId,
       diagram.stockName,
       diagram.stockW,
       diagram.stockH,
@@ -158,6 +162,7 @@ class CuttingEngine {
         for (var index = 0; index < result.linear.length; index++) {
           final layout = result.linear[index];
           layout.stockName = stock.name;
+          layout.stockId = stock.id;
           layout.index = allLinear.length + 1;
           allLinear.add(layout);
         }
@@ -171,6 +176,7 @@ class CuttingEngine {
             layout.stockH,
             layout.usedArea,
             stockName: stock.name,
+            stockId: stock.id,
           );
           allSheets.add(combined);
         }
@@ -226,7 +232,7 @@ class CuttingEngine {
     final totalDemand = items.fold<double>(0, (sum, item) => sum + item.a);
     final totalStock = sticks.length * usable;
     final notes = <String>[
-      'Heuristic: best-fit/first-fit across descending, ascending and entered demand orders; not a proof of global optimality.'
+      'Waste priority: minimise stock units first, then reduce offcut fragmentation. Heuristic result; global optimality is not proven.'
     ];
     final oversized =
         project.parts.where((part) => part.a > usable || part.a <= 0).toList();
@@ -271,7 +277,8 @@ class CuttingEngine {
         }
       }
 
-      selected ??= LinearStick(sticks.length + 1, [], 0, project.stock.width);
+      selected ??= LinearStick(sticks.length + 1, [], 0, project.stock.width,
+          stockName: project.stock.name, stockId: project.stock.id);
       if (!sticks.contains(selected)) sticks.add(selected);
 
       final x = project.trim +
@@ -311,14 +318,7 @@ class CuttingEngine {
 
     final usableW = project.stock.width - 2 * project.trim;
     final usableH = project.stock.height - 2 * project.trim;
-    final orders = <List<Part>>[
-      [...parts]..sort((a, b) => (b.a * b.b).compareTo(a.a * a.b)),
-      [...parts]
-        ..sort((a, b) => math.max(b.a, b.b).compareTo(math.max(a.a, a.b))),
-      [...parts]..sort((a, b) => b.a.compareTo(a.a)),
-      [...parts]..sort((a, b) => b.b.compareTo(a.b)),
-      [...parts]..sort((a, b) => (b.a + b.b).compareTo(a.a + a.b)),
-    ];
+    final orders = _sheetOrders(parts);
 
     final candidates = orders
         .map((order) => _packSheets(order, project, usableW, usableH))
@@ -326,8 +326,11 @@ class CuttingEngine {
       ..sort((left, right) {
         final count = left.length.compareTo(right.length);
         if (count != 0) return count;
-        return _sheetCompactnessScore(left)
+        final compactness = _sheetCompactnessScore(left)
             .compareTo(_sheetCompactnessScore(right));
+        if (compactness != 0) return compactness;
+        return _sheetEdgeWasteScore(left)
+            .compareTo(_sheetEdgeWasteScore(right));
       });
 
     final sheets = candidates.first;
@@ -335,7 +338,7 @@ class CuttingEngine {
         parts.fold<double>(0, (sum, part) => sum + part.a * part.b);
     final totalArea = sheets.length * usableW * usableH;
     final notes = <String>[
-      'Heuristic: best layout from area, longest-side, width, height and perimeter orderings; not a proof of global optimality.',
+      'Waste priority: minimise sheet count first, then choose the most compact layout from multiple deterministic part orderings. Global optimality is not proven.',
       'Layouts show geometric nesting only. Guillotine cut sequence and machine-specific constraints are not implemented.'
     ];
     final invalid = parts
@@ -361,6 +364,39 @@ class CuttingEngine {
       totalStockArea: totalArea,
       notes: notes,
     );
+  }
+
+  static List<List<Part>> _sheetOrders(List<Part> parts) {
+    final orders = <List<Part>>[];
+    final comparators = <int Function(Part, Part)>[
+      (a, b) => (b.a * b.b).compareTo(a.a * a.b),
+      (a, b) => math.max(b.a, b.b).compareTo(math.max(a.a, a.b)),
+      (a, b) => math.min(b.a, b.b).compareTo(math.min(a.a, a.b)),
+      (a, b) => (b.a + b.b).compareTo(a.a + a.b),
+      (a, b) => b.a.compareTo(a.a),
+      (a, b) => b.b.compareTo(a.b),
+      (a, b) => _aspectRatio(b).compareTo(_aspectRatio(a)),
+    ];
+
+    for (final compare in comparators) {
+      final ordered = [...parts]..sort((a, b) {
+          final primary = compare(a, b);
+          if (primary != 0) return primary;
+          final longSide = math.max(b.a, b.b).compareTo(math.max(a.a, a.b));
+          if (longSide != 0) return longSide;
+          final area = (b.a * b.b).compareTo(a.a * a.b);
+          return area != 0 ? area : a.name.compareTo(b.name);
+        });
+      orders.add(ordered);
+      orders.add(ordered.reversed.toList());
+    }
+
+    return orders;
+  }
+
+  static double _aspectRatio(Part part) {
+    final shortSide = math.min(part.a, part.b);
+    return shortSide <= 0 ? 0 : math.max(part.a, part.b) / shortSide;
   }
 
   static List<SheetLayout> _packSheets(
@@ -389,8 +425,9 @@ class CuttingEngine {
       }
 
       if (selectedSheet == null) {
-        selectedSheet = SheetLayout(sheets.length + 1, [], project.stock.width,
-            project.stock.height, 0);
+        selectedSheet = SheetLayout(
+            sheets.length + 1, [], project.stock.width, project.stock.height, 0,
+            stockName: project.stock.name, stockId: project.stock.id);
         selectedSpot = _findSpot(
             selectedSheet.placements, part, usableW, usableH, project.kerf);
         if (selectedSpot == null) continue;
@@ -434,6 +471,19 @@ class CuttingEngine {
         return score + maxX * maxY;
       });
 
+  static double _sheetEdgeWasteScore(List<SheetLayout> sheets) =>
+      sheets.fold<double>(0, (score, sheet) {
+        var maxX = 0.0;
+        var maxY = 0.0;
+        for (final part in sheet.placements) {
+          maxX = math.max(maxX, part.x + part.w);
+          maxY = math.max(maxY, part.y + part.h);
+        }
+        final boundingWaste = math.max(0, maxX * maxY - sheet.usedArea);
+        final edgeSlack = (sheet.stockW - maxX) * (sheet.stockH - maxY);
+        return score + boundingWaste + edgeSlack;
+      });
+
   static PlacedPart? _findSpot(List<PlacedPart> placed, Part part, double maxW,
       double maxH, double kerf) {
     final candidates = <Offset>[const Offset(0, 0)];
@@ -441,11 +491,8 @@ class CuttingEngine {
       candidates.add(Offset(existing.x + existing.w + kerf, existing.y));
       candidates.add(Offset(existing.x, existing.y + existing.h + kerf));
     }
-    candidates.sort((a, b) {
-      final byY = a.dy.compareTo(b.dy);
-      return byY != 0 ? byY : a.dx.compareTo(b.dx);
-    });
-
+    PlacedPart? best;
+    var bestScore = double.infinity;
     for (final point in candidates) {
       for (final rotated in [false, true]) {
         if (rotated && (!part.rotate || part.a == part.b)) continue;
@@ -456,14 +503,26 @@ class CuttingEngine {
         final rect = Rect.fromLTWH(point.dx, point.dy, w + kerf, h + kerf);
         final collision = placed.any((old) => rect
             .overlaps(Rect.fromLTWH(old.x, old.y, old.w + kerf, old.h + kerf)));
-        if (!collision) {
-          return PlacedPart(part.name, point.dx, point.dy, w, h,
-              rotated: rotated,
-              partId: part.id,
-              pieceIndex: part.pieceIndex ?? 0);
+        if (collision) continue;
+
+        var boundsW = point.dx + w;
+        var boundsH = point.dy + h;
+        for (final old in placed) {
+          boundsW = math.max(boundsW, old.x + old.w);
+          boundsH = math.max(boundsH, old.y + old.h);
         }
+        final boundsArea = boundsW * boundsH;
+        final shortSideSlack =
+            math.min(maxW - point.dx - w, maxH - point.dy - h);
+        final score = boundsArea + shortSideSlack * 0.001;
+        if (score >= bestScore) continue;
+        bestScore = score;
+        best = PlacedPart(part.name, point.dx, point.dy, w, h,
+            rotated: rotated,
+            partId: part.id,
+            pieceIndex: part.pieceIndex ?? 0);
       }
     }
-    return null;
+    return best;
   }
 }

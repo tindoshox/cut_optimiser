@@ -92,6 +92,24 @@ void main() {
     expect(result.linear.expand((stick) => stick.cuts).length, 6);
   });
 
+  test('linear solver minimises stock waste for an exact bar packing', () {
+    final project = Project(
+      name: 'Zero-waste linear pack',
+      mode: CutMode.linear,
+      stock: StockConfig(width: 100, kerf: 0, trim: 0),
+      parts: [
+        Part(name: 'Long 1', a: 60),
+        Part(name: 'Short 1', a: 40),
+        Part(name: 'Long 2', a: 60),
+        Part(name: 'Short 2', a: 40),
+      ],
+    );
+
+    final result = CuttingEngine.solve(project);
+    expect(result.stockCount, 2);
+    expect(result.waste, 0);
+  });
+
   test('sheet multi-order heuristic selects a tighter nesting', () {
     final project = Project(
       name: 'Mixed rectangle nesting',
@@ -112,6 +130,22 @@ void main() {
     expect(result.sheets.single.placements.length, 6);
   });
 
+  test('sheet solver minimises stock waste for a tiled sheet', () {
+    final project = Project(
+      name: 'Zero-waste sheet pack',
+      mode: CutMode.sheet,
+      stock: StockConfig(width: 100, height: 100, kerf: 0, trim: 0),
+      parts: [
+        for (var index = 0; index < 4; index++)
+          Part(name: 'Quarter $index', a: 50, b: 50, rotate: false),
+      ],
+    );
+
+    final result = CuttingEngine.solve(project);
+    expect(result.stockCount, 1);
+    expect(result.waste, 0);
+  });
+
   test('linear solver optimises each assigned stock type separately', () {
     final stock50 = StockConfig(id: '50', name: '50x50 tube', width: 6000);
     final stock25 = StockConfig(id: '25', name: '25x25 tube', width: 3000);
@@ -128,6 +162,8 @@ void main() {
     expect(result.linear.length, 2);
     expect(result.linear.where((s) => s.stockName == '50x50 tube').length, 1);
     expect(result.linear.where((s) => s.stockName == '25x25 tube').length, 1);
+    expect(result.linear.where((s) => s.stockId == '50').length, 1);
+    expect(result.linear.where((s) => s.stockId == '25').length, 1);
     expect(result.linear.expand((s) => s.cuts).length, 5);
   });
 

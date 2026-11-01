@@ -1,7 +1,7 @@
 name: cut_optimiser
 description: Cross-platform sheet and linear cutting optimiser.
 publish_to: none
-version: 0.2.0+2
+version: 0.2.1+3
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
